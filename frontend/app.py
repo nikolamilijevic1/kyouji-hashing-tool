@@ -27,7 +27,7 @@ st.markdown("""
         color: #ffffff;
     }
     .stButton>button {
-        background: linear-gradient(90deg, #b7954b 0%, #483b18 100%);
+        background: linear-gradient(90deg, #4b6cb7 0%, #182848 100%);
         color: white;
         border: None;
         padding: 10px 24px;
@@ -37,31 +37,22 @@ st.markdown("""
     }
     .stButton>button:hover {
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(183, 149, 75, 0.4);
-    }
-    .header-container {
-        padding: 2rem;
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 15px;
-        margin-bottom: 2rem;
-        border: 1px solid rgba(183, 149, 75, 0.2);
+        box-shadow: 0 4px 12px rgba(75, 108, 183, 0.4);
     }
     h1 {
-        background: -webkit-linear-gradient(#ffdf80, #b7954b);
+        background: -webkit-linear-gradient(#ffffff, #4b6cb7);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-weight: 800;
+        margin-top: -50px; /* Pull the title up to the top */
     }
     </style>
 """, unsafe_allow_html=True)
 
 # App Header
-with st.container():
-    st.markdown('<div class="header-container">', unsafe_allow_html=True)
-    st.title("🏮 SHA-256 Hashing and Redaction Tool")
-    st.markdown("### Deterministic Data Integrity & Verification")
-    st.markdown("Redact sensitive data or verify integrity using deterministic SHA-256. Built for unshakeable data truth.")
-    st.markdown('</div>', unsafe_allow_html=True)
+st.title("🏮 SHA-256 Hashing and Redaction Tool")
+st.markdown("### Deterministic Data Integrity & Verification")
+st.markdown("Redact sensitive data or verify integrity using deterministic SHA-256. Built for unshakeable data truth.")
 
 # Backend URL
 BACKEND_URL = "http://backend:8000"
