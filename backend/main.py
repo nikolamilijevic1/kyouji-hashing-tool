@@ -7,7 +7,7 @@ from backend.logic import generate_hash, _hash_worker
 from backend.logger import log_forensic_event
 import os
 
-app = FastAPI(title="Forensic Data Verification API")
+app = FastAPI(title="Kyouji: Hashing API")
 
 # Hashing Engine Configuration
 def get_optimal_worker_count() -> int:

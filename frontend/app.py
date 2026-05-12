@@ -5,20 +5,25 @@ import json
 
 # Set page configuration
 st.set_page_config(
-    page_title="Forensic Data Verification Tool",
+    page_title="Kyouji Hashing Service",
     page_icon="🛡️",
     layout="wide",
 )
 
 # Custom CSS for premium look
 st.markdown("""
-    <style>
+    /* Hide Streamlit header and footer */
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    .stDeployButton {display:none;}
+    
     .main {
         background-color: #0e1117;
         color: #ffffff;
     }
     .stButton>button {
-        background: linear-gradient(90deg, #4b6cb7 0%, #182848 100%);
+        background: linear-gradient(90deg, #b7954b 0%, #483b18 100%);
         color: white;
         border: None;
         padding: 10px 24px;
@@ -28,17 +33,17 @@ st.markdown("""
     }
     .stButton>button:hover {
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(75, 108, 183, 0.4);
+        box-shadow: 0 4px 12px rgba(183, 149, 75, 0.4);
     }
     .header-container {
         padding: 2rem;
         background: rgba(255, 255, 255, 0.05);
         border-radius: 15px;
         margin-bottom: 2rem;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(183, 149, 75, 0.2);
     }
     h1 {
-        background: -webkit-linear-gradient(#eee, #333);
+        background: -webkit-linear-gradient(#ffdf80, #b7954b);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-weight: 800;
@@ -49,9 +54,9 @@ st.markdown("""
 # App Header
 with st.container():
     st.markdown('<div class="header-container">', unsafe_allow_html=True)
-    st.title("🛡️ Forensic SHA-256 Redaction Tool")
-    st.markdown("### Enterprise-Grade Deterministic Hashing & Verification")
-    st.markdown("Redact sensitive data or verify integrity using raw SHA-256. Optimized for multi-core performance.")
+    st.title("🏮 Kyouji: Hashing & Redaction")
+    st.markdown("### Deterministic Data Integrity & Verification")
+    st.markdown("Redact sensitive data or verify integrity using deterministic SHA-256. Built for unshakeable data truth.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Backend URL (configurable via env but defaulting to the service name in docker-compose)
@@ -68,7 +73,7 @@ with st.sidebar:
         st.error("Backend Disconnected")
     
     st.divider()
-    st.info("Forensic Integrity: SHA-256 is deterministic. Leading and trailing whitespace is stripped, but casing is preserved for verification.")
+    st.info("Kyouji (矜持): Pride in Integrity. SHA-256 is deterministic; whitespace is stripped to ensure the core data truth is preserved.")
 
 # Main Content Tabs
 tab1, tab2 = st.tabs(["Single Hash", "Bulk Processing"])
@@ -146,4 +151,4 @@ with tab2:
 
 # Footer
 st.divider()
-st.caption("Forensic SHA-256 Redaction Tool v2.0 | Deterministic | Third-Party Verifiable | Parallelized")
+st.caption("Kyouji v2.0 | Deterministic | Third-Party Verifiable | Parallelized")
