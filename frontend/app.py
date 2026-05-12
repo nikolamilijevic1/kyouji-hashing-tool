@@ -2,11 +2,25 @@ import streamlit as st
 import requests
 import pandas as pd
 import json
+import base64
+from PIL import Image
+import os
 
 # Set page configuration
+logo_path = os.path.join(os.path.dirname(__file__), "company_logo.svg.png")
+try:
+    logo_img = Image.open(logo_path)
+    # Convert to base64 for perfect HTML centering
+    with open(logo_path, "rb") as f:
+        logo_base64 = base64.b64encode(f.read()).decode()
+    logo_html = f'<img src="data:image/png;base64,{logo_base64}" width="80" style="margin-right: 20px;">'
+except:
+    logo_img = "🏮"
+    logo_html = '<span style="font-size: 50px; margin-right: 20px;">🏮</span>'
+
 st.set_page_config(
     page_title="SHA-256 Hashing Tool",
-    page_icon="🏮",
+    page_icon=logo_img,
     layout="wide",
 )
 
@@ -44,13 +58,25 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-weight: 800;
-        margin-top: -50px; /* Pull the title up to the top */
+        margin: 0 !important;
+    }
+    .header-flex {
+        display: flex;
+        align-items: center;
+        margin-top: -50px;
+        margin-bottom: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# App Header
-st.title("🏮 SHA-256 Hashing and Redaction Tool")
+# App Header with Flexbox centering
+st.markdown(f"""
+    <div class="header-flex">
+        {logo_html}
+        <h1>SHA-256 Hashing and Redaction Tool</h1>
+    </div>
+""", unsafe_allow_html=True)
+
 st.markdown("### Deterministic Data Integrity & Verification")
 st.markdown("Redact sensitive data or verify integrity using deterministic SHA-256. Built for unshakeable data truth.")
 
