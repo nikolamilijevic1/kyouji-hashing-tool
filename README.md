@@ -21,6 +21,12 @@ Requires Docker and Docker Compose.
 docker-compose up --build
 ```
 
+## Access
+Once the containers are running, you can access the services at:
+- **Frontend UI**: [http://localhost:8501](http://localhost:8501)
+- **API Documentation**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Raw API**: [http://localhost:8000](http://localhost:8000)
+
 ## API Reference
 
 ### Single Item
