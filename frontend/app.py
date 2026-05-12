@@ -49,9 +49,9 @@ st.markdown("""
 # App Header
 with st.container():
     st.markdown('<div class="header-container">', unsafe_allow_html=True)
-    st.title("🛡️ Forensic Data Verification Tool")
-    st.markdown("### Enterprise-Grade Secure Hashing & Verification")
-    st.markdown("Ensure data integrity with HMAC-SHA256 one-way hashing. Optimized for multi-core performance.")
+    st.title("🛡️ Forensic SHA-256 Redaction Tool")
+    st.markdown("### Enterprise-Grade Deterministic Hashing & Verification")
+    st.markdown("Redact sensitive data or verify integrity using raw SHA-256. Optimized for multi-core performance.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Backend URL (configurable via env but defaulting to the service name in docker-compose)
@@ -68,7 +68,7 @@ with st.sidebar:
         st.error("Backend Disconnected")
     
     st.divider()
-    st.info("Forensic Integrity: Data is processed exactly as provided (UTF-8 encoded). Every character, including whitespace and case, is significant.")
+    st.info("Forensic Integrity: SHA-256 is deterministic. Leading and trailing whitespace is stripped, but casing is preserved for verification.")
 
 # Main Content Tabs
 tab1, tab2 = st.tabs(["Single Hash", "Bulk Processing"])
@@ -124,7 +124,7 @@ with tab2:
                         # Display results in a table
                         results_df = pd.DataFrame({
                             "Original (Preview)": [d[:50] + "..." if len(d) > 50 else d for d in data_list],
-                            "HMAC-SHA256 Hash": hashes
+                            "SHA-256 Hash / Redacted Form": hashes
                         })
                         st.table(results_df)
                         
@@ -146,4 +146,4 @@ with tab2:
 
 # Footer
 st.divider()
-st.caption("Forensic Data Verification Tool v1.1 | Secure | No Normalization | Parallelized")
+st.caption("Forensic SHA-256 Redaction Tool v2.0 | Deterministic | Third-Party Verifiable | Parallelized")
