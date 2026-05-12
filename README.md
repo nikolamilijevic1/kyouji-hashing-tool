@@ -1,27 +1,20 @@
-# SHA-256 Redaction Tool
+# SHA-256 Hashing & Redaction Service
 
-A high-performance service for deterministic data hashing and redaction.
+A tool for generating deterministic SHA-256 hashes of forensic data strings. Used for data redaction and verification while ensuring consistency via whitespace stripping.
 
-## Core Features
-
--   **Deterministic Hashing**: Implements raw SHA-256. Leading and trailing whitespace is stripped before hashing; casing is preserved.
--   **Parallel Processing**: Utilizes `ProcessPoolExecutor` for CPU-bound tasks. Bulk operations are optimized via `executor.map` with configurable chunking.
--   **Automated Build Verification**: Cryptographic logic is validated against hardcoded ground-truth hashes during the Docker build process (`verify_logic.py`).
-
-## Technical Stack
-
--   **Backend**: FastAPI (Python 3.11).
--   **Frontend**: Streamlit.
--   **Orchestration**: Docker Compose.
+## Features
+- **Deterministic Hashing**: SHA-256 implementation that strips leading/trailing whitespace before hashing.
+- **Bulk Processing**: Multi-core hashing for large lists of strings using `ProcessPoolExecutor`.
+- **API Access**: FastAPI endpoints for single and bulk hashing operations.
+- **Verification Suite**: Build-time logic and API integrity checks.
 
 ## Configuration
-
-### Performance Tuning
-- `MAX_HASH_WORKERS`: Auto-detected via `os.sched_getaffinity` (container-aware) with 1 core reserved for system headroom.
-- `HASH_CHUNK_SIZE`: Dynamically calculated based on workload to optimize multi-core distribution.
+Tuning parameters available in `.env`:
+- `MAX_HASH_WORKERS`: Number of parallel workers (detected automatically with 1-core headroom).
+- `HASH_CHUNK_SIZE`: Task distribution size per worker (calculated dynamically).
 
 ## Deployment
-
+Requires Docker and Docker Compose.
 ```bash
 docker-compose up --build
 ```
@@ -43,10 +36,10 @@ docker-compose up --build
 ## Project Structure
 - `backend/`: FastAPI application and hashing logic.
 - `frontend/`: Streamlit dashboard.
-- `tests/`: Dedicated test suite (Logic & API).
+- `tests/`: Logic and API integrity tests.
 
 ## Testing
-Logic and API integrity checks are executed automatically during the Docker build.
+Logic and API checks are executed automatically during the Docker build.
 
 To run manually:
 ```bash
