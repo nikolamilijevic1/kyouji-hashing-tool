@@ -1,0 +1,14 @@
+[project]
+name = "forensic-data-verification-tool"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.136.1",
+    "httpx>=0.28.1",
+    "pandas>=3.0.3",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "requests>=2.34.0",
+    "streamlit>=1.57.0",
+    "uvicorn>=0.46.0",
+]

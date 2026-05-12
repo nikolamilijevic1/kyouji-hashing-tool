@@ -89,7 +89,7 @@ async def _process_hashing(request: Request, data_list: List[str]):
         num_items = len(data_list)
         
         # Dynamic Chunksize Logic:
-        # Scale chunks up for massive lists to balance IPC overhead vs. multi-core distribution.
+        # Use a minimum of 1000. Scale chunks up for massive lists to balance IPC overhead vs. multi-core distribution.
         dynamic_chunksize = max(1000, num_items // (MAX_HASH_WORKERS * 4))
         
         # Offload hashing to the ProcessPoolExecutor
