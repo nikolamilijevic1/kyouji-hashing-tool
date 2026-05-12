@@ -1,6 +1,6 @@
 # Kyouji: Hashing & Redaction Tool
 
-*Kyouji (矜持) is a Japanese term for "pride" or "dignity"—specifically the pride one takes in unshakeable adherence to one's own principles. In this service, it represents the unwavering integrity of the SHA-256 algorithm. Like a person with 'Kyouji', the hash remains constant, truthful, and dignified, regardless of external attempts to alter its core truth.*
+*Kyouji (矜持) is a Japanese term for professional pride and inner dignity. In this service, it represents the unwavering integrity of the SHA-256 algorithm. Like a person with 'Kyouji', the hash remains constant, truthful, and dignified, regardless of external attempts to alter its core truth.*
 
 A tool for generating deterministic SHA-256 hashes. Used for data redaction and verification while ensuring consistency via whitespace stripping.
 

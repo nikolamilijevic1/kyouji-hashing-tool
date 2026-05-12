@@ -5,19 +5,23 @@ import json
 
 # Set page configuration
 st.set_page_config(
-    page_title="Kyouji Hashing Service",
-    page_icon="🛡️",
+    page_title="SHA-256 Hashing Tool",
+    page_icon="🏮",
     layout="wide",
 )
 
-# Custom CSS for premium look
+# Custom CSS for premium look and hiding Streamlit elements
 st.markdown("""
-    /* Hide Streamlit header and footer */
-    header {visibility: hidden;}
+    <style>
+    /* Completely remove the top header bar and status indicators */
+    [data-testid="stHeader"] {display: none !important;}
     footer {visibility: hidden;}
     #MainMenu {visibility: hidden;}
     .stDeployButton {display:none;}
     
+    /* Hide the red/orange/yellow running indicator */
+    div[data-testid="stStatusWidget"] {visibility: hidden !important;}
+
     .main {
         background-color: #0e1117;
         color: #ffffff;
@@ -54,26 +58,24 @@ st.markdown("""
 # App Header
 with st.container():
     st.markdown('<div class="header-container">', unsafe_allow_html=True)
-    st.title("🏮 Kyouji: Hashing & Redaction")
+    st.title("🏮 SHA-256 Hashing and Redaction Tool")
     st.markdown("### Deterministic Data Integrity & Verification")
     st.markdown("Redact sensitive data or verify integrity using deterministic SHA-256. Built for unshakeable data truth.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Backend URL (configurable via env but defaulting to the service name in docker-compose)
+# Backend URL
 BACKEND_URL = "http://backend:8000"
 
 # Sidebar for configuration/info
 with st.sidebar:
     st.header("Status")
     try:
-        # Simple health check (optional, but good for UI)
-        # response = requests.get(f"{BACKEND_URL}/docs", timeout=1)
         st.success("Backend Connected")
     except:
         st.error("Backend Disconnected")
     
     st.divider()
-    st.info("Kyouji (矜持): Pride in Integrity. SHA-256 is deterministic; whitespace is stripped to ensure the core data truth is preserved.")
+    st.info("Forensic Integrity: SHA-256 is deterministic. Leading and trailing whitespace is stripped, but casing is preserved for verification.")
 
 # Main Content Tabs
 tab1, tab2 = st.tabs(["Single Hash", "Bulk Processing"])
@@ -104,9 +106,7 @@ with tab1:
 with tab2:
     st.subheader("Bulk Hash Processing")
     st.markdown("Upload a file or paste multiple strings (one per line).")
-    
     bulk_input = st.text_area("Paste strings here:", height=200, placeholder="String 1\nString 2\nString 3...")
-    
     uploaded_file = st.file_uploader("Or upload a text file:", type=["txt"])
     
     if st.button("Process Bulk Request", key="bulk_hash_btn"):
@@ -125,20 +125,16 @@ with tab2:
                     )
                     if response.status_code == 200:
                         hashes = response.json()["hashes"]
-                        
-                        # Display results in a table
                         results_df = pd.DataFrame({
                             "Original (Preview)": [d[:50] + "..." if len(d) > 50 else d for d in data_list],
                             "SHA-256 Hash / Redacted Form": hashes
                         })
                         st.table(results_df)
-                        
-                        # Download button for results
                         csv = results_df.to_csv(index=False).encode('utf-8')
                         st.download_button(
                             label="Download Results as CSV",
                             data=csv,
-                            file_name="forensic_hashes.csv",
+                            file_name="hashes.csv",
                             mime="text/csv",
                         )
                         st.success(f"Processed {len(data_list)} items successfully.")
@@ -151,4 +147,4 @@ with tab2:
 
 # Footer
 st.divider()
-st.caption("Kyouji v2.0 | Deterministic | Third-Party Verifiable | Parallelized")
+st.caption("v2.0 | Deterministic | Third-Party Verifiable | Parallelized")
