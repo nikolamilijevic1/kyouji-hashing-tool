@@ -3,15 +3,25 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import List
 from fastapi import FastAPI, Request, HTTPException
 from pydantic import BaseModel
-from logic import generate_hash, _hash_worker
-from logger import log_forensic_event
+from backend.logic import generate_hash, _hash_worker
+from backend.logger import log_forensic_event
 import os
 
 app = FastAPI(title="Forensic Data Verification API")
 
 # Hashing Engine Configuration
-MAX_HASH_WORKERS = int(os.getenv("MAX_HASH_WORKERS", os.cpu_count() or 4))
-DEFAULT_CHUNK_SIZE = int(os.getenv("HASH_CHUNK_SIZE", 1000))
+def get_optimal_worker_count() -> int:
+    try:
+        # Linux-specific: detects only CPUs assigned to the container/process
+        cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        # Fallback for Windows or non-Linux systems
+        cores = os.cpu_count() or 2
+    
+    # Leave 1 core as headroom for the main FastAPI process, minimum 1 worker
+    return max(1, cores - 1)
+
+MAX_HASH_WORKERS = int(os.getenv("MAX_HASH_WORKERS", get_optimal_worker_count()))
 
 # Initialize ProcessPoolExecutor
 executor = ProcessPoolExecutor(max_workers=MAX_HASH_WORKERS)
@@ -50,11 +60,17 @@ async def hash_bulk(request: Request, body: BulkHashRequest):
 
     try:
         loop = asyncio.get_running_loop()
+        num_items = len(body.data_list)
         
-        # Offload the map operation to the executor using the defined chunk size.
+        # Dynamic Chunksize Logic:
+        # Use a minimum of 1000. Scale chunks up for massive lists to balance IPC vs. load balancing.
+        # We aim for ~4 tasks per worker to ensure good distribution.
+        dynamic_chunksize = max(1000, num_items // (MAX_HASH_WORKERS * 4))
+        
+        # Offload the map operation to the executor using the dynamic chunk size.
         results = await loop.run_in_executor(
             None, 
-            lambda: list(executor.map(_hash_worker, body.data_list, chunksize=DEFAULT_CHUNK_SIZE))
+            lambda: list(executor.map(_hash_worker, body.data_list, chunksize=dynamic_chunksize))
         )
         
         log_forensic_event(request, items_processed=len(body.data_list))

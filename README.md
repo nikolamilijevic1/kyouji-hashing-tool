@@ -16,10 +16,9 @@ A high-performance service for deterministic data hashing and redaction.
 
 ## Configuration
 
-Performance parameters can be tuned via environment variables in `.env`:
-
--   `MAX_HASH_WORKERS`: Maximum concurrent worker processes (defaults to CPU count).
--   `HASH_CHUNK_SIZE`: Task size per worker (defaults to 1000) to balance IPC overhead vs. load balancing.
+### Performance Tuning
+- `MAX_HASH_WORKERS`: Auto-detected via `os.sched_getaffinity` (container-aware) with 1 core reserved for system headroom.
+- `HASH_CHUNK_SIZE`: Dynamically calculated based on workload to optimize multi-core distribution.
 
 ## Deployment
 
@@ -44,4 +43,15 @@ docker-compose up --build
 ## Project Structure
 - `backend/`: FastAPI application and hashing logic.
 - `frontend/`: Streamlit dashboard.
-- `verify_logic.py`: Standalone verification suite.
+- `tests/`: Dedicated test suite (Logic & API).
+
+## Testing
+Logic and API integrity checks are executed automatically during the Docker build.
+
+To run manually:
+```bash
+# Set PYTHONPATH to the root
+$env:PYTHONPATH = "."
+python tests/test_logic.py
+python tests/test_api.py
+```
