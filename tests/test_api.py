@@ -1,8 +1,9 @@
 import sys
 import os
 from fastapi.testclient import TestClient
+import io
 
-# Add the project root to sys.path to import production logic
+# Add the project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from backend.main import app
@@ -41,6 +42,19 @@ def test_api_endpoints():
     assert response.status_code == 200
     assert response.json()["hashes"] == expected_hashes
     print("  - Bulk hashing verified.")
+
+    # 3. Test File Upload Endpoint
+    print("Testing /hash/file (Upload)...")
+    file_content = "  Test String  \ndata to verify\nDATA TO VERIFY\n"
+    file_obj = io.BytesIO(file_content.encode("utf-8"))
+    
+    response = client.post(
+        "/hash/file",
+        files={"file": ("test.txt", file_obj, "text/plain")}
+    )
+    assert response.status_code == 200
+    assert response.json()["hashes"] == expected_hashes
+    print("  - File upload hashing verified.")
 
     print("-" * 40)
     print("API FULL-STACK VERIFICATION PASSED.")

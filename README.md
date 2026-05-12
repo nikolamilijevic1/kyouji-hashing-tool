@@ -35,11 +35,17 @@ Once the containers are running, you can access the services at:
 { "data": "string_to_hash" }
 ```
 
-### Bulk Processing
+### Bulk Processing (JSON)
 `POST /hash/bulk`
 ```json
 { "data_list": ["string1", "string2", "string3"] }
 ```
+
+### Bulk Processing (File)
+`POST /hash/file`
+Accepts a plain text file (`.txt`, `.log`, or single-column `.csv`) via multipart form-data. 
+- **Logic**: Each row/line is treated as a unique string to hash.
+- **Normalization**: Leading/trailing whitespace is stripped.
 
 ## Project Structure
 - `backend/`: FastAPI application and hashing logic.
