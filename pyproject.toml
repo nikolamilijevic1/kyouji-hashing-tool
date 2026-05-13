@@ -5,12 +5,13 @@ requires-python = ">=3.13"
 dependencies = []
 
 [tool.uv]
-workspace = { members = ["backend", "frontend"] }
+workspace = { members = ["src/backend", "src/frontend"] }
 
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
 ]
+
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src"]
 
