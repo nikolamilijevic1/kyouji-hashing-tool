@@ -124,43 +124,58 @@ with tab2:
     st.subheader("Bulk Hash Processing")
     st.markdown("Upload a file or paste multiple strings (one per line).")
     bulk_input = st.text_area("Paste strings here:", height=200, placeholder="String 1\nString 2\nString 3...")
-    uploaded_file = st.file_uploader("Or upload a text file:", type=["txt"])
+    uploaded_file = st.file_uploader("Or upload a text file:", type=["txt", "csv", "log"])
     
-    if st.button("Process Bulk Request", key="bulk_hash_btn"):
-        data_list = []
-        if uploaded_file:
-            data_list = [line.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") for line in uploaded_file if line]
-        elif bulk_input:
-            data_list = [line for line in bulk_input.split("\n") if line]
+    if uploaded_file:
+        st.info("File uploaded. Ready to stream hashes directly to your device with zero disk overhead.")
         
-        if data_list:
-            with st.spinner(f"Processing {len(data_list)} items across multiple cores..."):
-                try:
-                    response = requests.post(
-                        f"{BACKEND_URL}/hash/bulk",
-                        json={"data_list": data_list}
-                    )
-                    if response.status_code == 200:
-                        hashes = response.json()["hashes"]
-                        results_df = pd.DataFrame({
-                            "Original (Preview)": [d[:50] + "..." if len(d) > 50 else d for d in data_list],
-                            "SHA-256 Hash / Redacted Form": hashes
-                        })
-                        st.table(results_df)
-                        csv = results_df.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            label="Download Results as CSV",
-                            data=csv,
-                            file_name="hashes.csv",
-                            mime="text/csv",
+        def backend_stream_generator():
+            import httpx
+            uploaded_file.seek(0)
+            yield b"Original,SHA-256 Hash\n"
+            with httpx.stream("POST", f"{BACKEND_URL}/hash/file", files={"file": ("upload.txt", uploaded_file, "text/plain")}, timeout=None) as r:
+                for chunk in r.iter_bytes(chunk_size=8192):
+                    yield chunk
+
+        st.download_button(
+            label="Stream & Download Processed File",
+            data=backend_stream_generator(),
+            file_name="hashes.csv",
+            mime="text/csv"
+        )
+        
+    elif bulk_input:
+        if st.button("Process Bulk Request", key="bulk_hash_btn"):
+            data_list = [line for line in bulk_input.split("\n") if line]
+            if data_list:
+                with st.spinner(f"Processing {len(data_list)} items across multiple cores..."):
+                    try:
+                        import requests
+                        response = requests.post(
+                            f"{BACKEND_URL}/hash/bulk",
+                            json={"data_list": data_list}
                         )
-                        st.success(f"Processed {len(data_list)} items successfully.")
-                    else:
-                        st.error(f"Error: {response.json().get('detail', 'Unknown error')}")
-                except Exception as e:
-                    st.error(f"Failed to connect to backend: {e}")
-        else:
-            st.warning("Please provide some input data.")
+                        if response.status_code == 200:
+                            hashes = response.json()["hashes"]
+                            results_df = pd.DataFrame({
+                                "Original (Preview)": [d[:50] + "..." if len(d) > 50 else d for d in data_list],
+                                "SHA-256 Hash / Redacted Form": hashes
+                            })
+                            st.table(results_df)
+                            csv = results_df.to_csv(index=False).encode('utf-8')
+                            st.download_button(
+                                label="Download Results as CSV",
+                                data=csv,
+                                file_name="hashes.csv",
+                                mime="text/csv",
+                            )
+                            st.success(f"Processed {len(data_list)} items successfully.")
+                        else:
+                            st.error(f"Error: {response.json().get('detail', 'Unknown error')}")
+                    except Exception as e:
+                        st.error(f"Failed to connect to backend: {e}")
+            else:
+                st.warning("Please provide some input data.")
 
 # Footer
 st.divider()

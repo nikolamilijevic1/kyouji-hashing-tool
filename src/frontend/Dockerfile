@@ -16,4 +16,4 @@ COPY --from=builder /app/.venv /app/.venv
 COPY src/frontend/ /app/frontend/
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8501
-CMD ["streamlit", "run", "frontend/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+CMD ["streamlit", "run", "frontend/app.py", "--server.port", "8501", "--server.address", "0.0.0.0", "--server.maxUploadSize", "15000"]

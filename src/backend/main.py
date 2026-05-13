@@ -1,8 +1,10 @@
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from backend.logic import generate_hash, _hash_worker
 from backend.logger import log_forensic_event
@@ -67,25 +69,51 @@ async def hash_bulk(request: Request, body: BulkHashRequest):
     """
     return await _process_hashing(request, body.data_list)
 
-@app.post("/hash/file", response_model=BulkHashResponse)
+@app.post("/hash/file")
 async def hash_file(request: Request, file: UploadFile = File(...)):
     """
-    Bulk process hashing via plain text file upload.
-
-    - **Format**: Accepts plain text (.txt), log files (.log), or single-column CSVs.
-    - **Logic**: Each row/line is treated as a unique string to be hashed.
-    - **Normalization**: Leading and trailing whitespace is automatically stripped.
-    - **Order**: Hashes are returned in a JSON list following the original line order.
+    Generate SHA-256 hashes for each line in a massive file without memory constraints.
+    Returns a text/csv stream containing the original value and hash.
     """
-    try:
-        content = await file.read()
-        # Decode and split by various newline formats
-        lines = content.decode("utf-8").splitlines()
-        # Clean data (remove empty lines)
-        data_list = [line for line in lines if line.strip()]
-        return await _process_hashing(request, data_list)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"File processing failed: {str(e)}")
+    async def stream_row_hashing():
+        loop = asyncio.get_running_loop()
+        executor = request.app.state.executor
+        chunk_size = 1024 * 1024
+        remainder = b""
+        
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                if remainder:
+                    clean_line = remainder.decode('utf-8', errors='ignore').strip()
+                    if clean_line:
+                        hashed = await loop.run_in_executor(executor, _hash_worker, clean_line)
+                        yield f"{clean_line},{hashed}\n"
+                break
+                
+            lines = (remainder + chunk).split(b"\n")
+            remainder = lines.pop()
+            
+            str_lines = [line.decode('utf-8', errors='ignore').strip() for line in lines if line.strip()]
+            
+            if str_lines:
+                # Distribute the lines evenly across all available workers
+                batch_size = max(1000, len(str_lines) // MAX_HASH_WORKERS)
+                batches = [str_lines[i:i + batch_size] for i in range(0, len(str_lines), batch_size)]
+                
+                tasks = [
+                    loop.run_in_executor(executor, _hash_chunk_sequentially, batch)
+                    for batch in batches
+                ]
+                
+                # asyncio.gather preserves exact deterministic order
+                batch_results = await asyncio.gather(*tasks)
+                chunk_hashes = [h for sublist in batch_results for h in sublist]
+                
+                for orig, h in zip(str_lines, chunk_hashes):
+                    yield f"{orig},{h}\n"
+                    
+    return StreamingResponse(stream_row_hashing(), media_type="text/csv")
 
 def _hash_chunk_sequentially(chunk: List[str]) -> List[str]:
     """Helper function to hash a chunk sequentially without spawning new threads."""
