@@ -34,7 +34,7 @@ uv run pytest
 ```
 
 ## Deployment
-Build and start the multi-stage Docker environment:
+Build and start the multi-stage Docker environment (note: the build automatically executes the test suite and will fail if tests do not pass):
 ```bash
 docker-compose up --build
 ```

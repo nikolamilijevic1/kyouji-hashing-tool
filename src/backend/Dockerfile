@@ -14,11 +14,12 @@ FROM builder AS tester
 COPY tests/ ./tests
 COPY src/backend/*.py ./src/backend/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv run pytest tests/
+    uv run pytest tests/ && touch /tmp/tests_passed
 
 # Stage 3: Runner
 FROM python:3.13-slim-bookworm
 WORKDIR /app
+COPY --from=tester /tmp/tests_passed /tmp/tests_passed
 COPY --from=builder /app/.venv /app/.venv
 COPY src/backend/*.py /app/backend/
 ENV PATH="/app/.venv/bin:$PATH"
