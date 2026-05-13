@@ -15,8 +15,26 @@ Tuning parameters available in `.env`:
 - `MAX_HASH_WORKERS`: Number of parallel workers (detected automatically with 1-core headroom).
 - `HASH_CHUNK_SIZE`: Task distribution size per worker (calculated dynamically).
 
+## Project Structure
+- `backend/`: FastAPI application and isolated dependencies.
+- `frontend/`: Streamlit dashboard and isolated dependencies.
+- `tests/`: Unified test suite for logic and API integrity.
+- `pyproject.toml`: Root uv workspace manager.
+- `uv.lock`: Unified lock file for the entire workspace.
+
+## Local Development
+Requires [uv](https://docs.astral.sh/uv/).
+
+```bash
+# Sync the entire workspace and hydrate the root venv
+uv sync --all-packages
+
+# Run the test suite
+uv run pytest
+```
+
 ## Deployment
-Requires Docker and Docker Compose.
+Build and start the multi-stage Docker environment:
 ```bash
 docker-compose up --build
 ```
@@ -47,18 +65,3 @@ Accepts a plain text file (`.txt`, `.log`, or single-column `.csv`) via multipar
 - **Logic**: Each row/line is treated as a unique string to hash.
 - **Normalization**: Leading/trailing whitespace is stripped.
 
-## Project Structure
-- `backend/`: FastAPI application and hashing logic.
-- `frontend/`: Streamlit dashboard.
-- `tests/`: Logic and API integrity tests.
-
-## Testing
-Logic and API checks are executed automatically during the Docker build.
-
-To run manually:
-```bash
-# Set PYTHONPATH to the root
-$env:PYTHONPATH = "."
-python tests/test_logic.py
-python tests/test_api.py
-```

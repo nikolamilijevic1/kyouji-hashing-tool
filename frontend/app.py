@@ -80,8 +80,8 @@ st.markdown(f"""
 st.markdown("### Deterministic Data Integrity & Verification")
 st.markdown("Redact sensitive data or verify integrity using deterministic SHA-256. Built for unshakeable data truth.")
 
-# Backend URL
-BACKEND_URL = "http://backend:8000"
+# Backend URL configuration
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 # Sidebar for configuration/info
 with st.sidebar:

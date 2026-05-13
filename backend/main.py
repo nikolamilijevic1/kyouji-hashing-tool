@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from concurrent.futures import ProcessPoolExecutor
 from typing import List
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile
@@ -7,7 +8,14 @@ from backend.logic import generate_hash, _hash_worker
 from backend.logger import log_forensic_event
 import os
 
-app = FastAPI(title="Kyouji: Hashing API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    yield
+    # Shutdown logic
+    executor.shutdown()
+
+app = FastAPI(title="Kyouji: Hashing API", lifespan=lifespan)
 
 # Hashing Engine Configuration
 def get_optimal_worker_count() -> int:
@@ -37,6 +45,10 @@ class HashResponse(BaseModel):
 
 class BulkHashResponse(BaseModel):
     hashes: List[str]
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 
 @app.post("/hash", response_model=HashResponse)
 async def hash_single(request: Request, body: HashRequest):
@@ -103,9 +115,6 @@ async def _process_hashing(request: Request, data_list: List[str]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.on_event("shutdown")
-def shutdown_event():
-    executor.shutdown()
 
 if __name__ == "__main__":
     import uvicorn
