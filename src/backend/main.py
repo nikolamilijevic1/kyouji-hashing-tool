@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from fastapi import FastAPI, Request, HTTPException, File, UploadFile
 from pydantic import BaseModel
@@ -11,9 +11,10 @@ import os
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
+    app.state.executor = ThreadPoolExecutor(max_workers=MAX_HASH_WORKERS)
     yield
     # Shutdown logic
-    executor.shutdown()
+    app.state.executor.shutdown()
 
 app = FastAPI(title="Kyouji: Hashing API", lifespan=lifespan)
 
@@ -29,10 +30,7 @@ def get_optimal_worker_count() -> int:
     # Leave 1 core as headroom for the main FastAPI process, minimum 1 worker
     return max(1, cores - 1)
 
-MAX_HASH_WORKERS = int(os.getenv("MAX_HASH_WORKERS", get_optimal_worker_count()))
-
-# Initialize ProcessPoolExecutor
-executor = ProcessPoolExecutor(max_workers=MAX_HASH_WORKERS)
+MAX_HASH_WORKERS = int(os.getenv("MAX_HASH_WORKERS", str(get_optimal_worker_count())))
 
 class HashRequest(BaseModel):
     data: str
@@ -89,9 +87,13 @@ async def hash_file(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"File processing failed: {str(e)}")
 
+def _hash_chunk_sequentially(chunk: List[str]) -> List[str]:
+    """Helper function to hash a chunk sequentially without spawning new threads."""
+    return [_hash_worker(item) for item in chunk]
+
 async def _process_hashing(request: Request, data_list: List[str]):
     """
-    Distribute list of strings across ProcessPoolExecutor for parallel SHA-256 hashing.
+    Distribute list of strings across ThreadPoolExecutor for parallel SHA-256 hashing using chunks.
     """
     if not data_list:
         return BulkHashResponse(hashes=[])
@@ -99,16 +101,24 @@ async def _process_hashing(request: Request, data_list: List[str]):
     try:
         loop = asyncio.get_running_loop()
         num_items = len(data_list)
+        executor = request.app.state.executor
         
-        # Dynamic Chunksize Logic:
-        # Use a minimum of 1000. Scale chunks up for massive lists to balance IPC overhead vs. multi-core distribution.
-        dynamic_chunksize = max(1000, num_items // (MAX_HASH_WORKERS * 4))
+        # Chunk the data to prevent event loop starvation and memory spikes
+        # Using a static micro-batch size (5000) guarantees perfect load distribution across all workers
+        chunk_size = int(os.getenv("HASH_CHUNK_SIZE", "5000"))
+        chunks = [data_list[i:i + chunk_size] for i in range(0, num_items, chunk_size)]
         
-        # Offload hashing to the ProcessPoolExecutor
-        results = await loop.run_in_executor(
-            None, 
-            lambda: list(executor.map(_hash_worker, data_list, chunksize=dynamic_chunksize))
-        )
+        # Offload chunks directly to custom executor
+        tasks = [
+            loop.run_in_executor(executor, _hash_chunk_sequentially, chunk)
+            for chunk in chunks
+        ]
+        
+        # Gather all chunk results concurrently without blocking default thread pool
+        chunked_results = await asyncio.gather(*tasks)
+        
+        # Flatten the list of lists
+        results = [item for sublist in chunked_results for item in sublist]
         
         log_forensic_event(request, items_processed=len(data_list))
         return BulkHashResponse(hashes=results)
