@@ -127,22 +127,42 @@ with tab2:
     uploaded_file = st.file_uploader("Or upload a text file:", type=["txt", "csv", "log"])
     
     if uploaded_file:
-        st.info("File uploaded. Ready to stream hashes directly to your device with zero disk overhead.")
+        st.info("File uploaded. Click below to begin streaming.")
         
-        def backend_stream_generator():
-            import httpx
-            uploaded_file.seek(0)
-            yield b"Original,SHA-256 Hash\n"
-            with httpx.stream("POST", f"{BACKEND_URL}/hash/file", files={"file": ("upload.txt", uploaded_file, "text/plain")}, timeout=None) as r:
-                for chunk in r.iter_bytes(chunk_size=8192):
-                    yield chunk
+        if st.button("Process & Prepare Download", key="process_file_btn"):
+            with st.spinner("Streaming file securely..."):
+                import httpx
+                import tempfile
+                import os
+                
+                uploaded_file.seek(0)
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb")
+                temp_file.write(b"Original,SHA-256 Hash\n")
+                
+                try:
+                    with httpx.stream("POST", f"{BACKEND_URL}/hash/file", files={"file": ("upload.txt", uploaded_file, "text/plain")}, timeout=None) as r:
+                        if r.status_code == 200:
+                            for chunk in r.iter_bytes(chunk_size=8192):
+                                temp_file.write(chunk)
+                            temp_file.close()
+                            st.session_state.download_file_path = temp_file.name
+                        else:
+                            st.error(f"Error: {r.read().decode()}")
+                except Exception as e:
+                    st.error(f"Failed to stream to backend: {e}")
 
-        st.download_button(
-            label="Stream & Download Processed File",
-            data=backend_stream_generator(),
-            file_name="hashes.csv",
-            mime="text/csv"
-        )
+        # The download button must be outside the process block so it doesn't disappear on click
+        if st.session_state.get("download_file_path"):
+            import os
+            if os.path.exists(st.session_state.download_file_path):
+                st.success("Processing complete! Ready for download.")
+                with open(st.session_state.download_file_path, "rb") as f:
+                    st.download_button(
+                        label="Download Processed File",
+                        data=f,
+                        file_name="hashes.csv",
+                        mime="text/csv"
+                    )
         
     elif bulk_input:
         if st.button("Process Bulk Request", key="bulk_hash_btn"):
