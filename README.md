@@ -12,10 +12,13 @@ A tool for generating deterministic SHA-256 hashes. Used for data redaction and 
 - **Verification Suite**: Build-time logic and API integrity checks.
 
 ## Configuration
-Tuning parameters available in `.env` (or via standard environment variables):
-- `MAX_HASH_WORKERS`: Number of parallel workers (detected automatically with 1-core headroom).
-- `HASH_CHUNK_SIZE`: Task distribution size per worker (calculated dynamically).
-- `PUBLIC_BACKEND_URL`: External URL of the backend (e.g., `http://192.168.1.50:8000`). Default is `http://localhost:8000`. Used to correctly route direct file downloads when deployed on a remote server.
+Tuning parameters available via standard environment variables:
+- `PUBLIC_BACKEND_URL`: External URL of the backend (e.g., `http://192.168.1.50:8000`). Default is `http://localhost:8000`. Used by the frontend for direct downloads.
+- `SHARED_DIR`: Directory for disk-to-disk transfers (default: `/app/shared/`).
+- `HASH_BATCH_SIZE`: Number of lines grouped per goroutine (default: `5000`).
+- `MAX_QUEUE_SIZE`: Futures channel backpressure limit (default: `1000`).
+- `MAX_LINE_MB`: Max buffer size for reading extreme lines (default: `10`).
+- `PORT`: Backend port (default: `8000`).
 
 ## Project Structure
 - `backend/`: FastAPI application and isolated dependencies.
