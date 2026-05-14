@@ -6,7 +6,7 @@ A high-performance tool for generating deterministic SHA-256 hashes at scale. Us
 
 ## Features
 - **Deterministic Hashing**: SHA-256 implementation that strips leading/trailing whitespace before hashing. Output is bit-for-bit reproducible.
-- **Zero-Allocation Hashing**: Backend operates strictly on native `[]byte` slices using `crypto/sha256`, eliminating string heap allocations and reducing GC pause overhead at 30M+ line scale.
+- **SIMD-Accelerated Hashing**: Uses `minio/sha256-simd` which leverages AVX2 CPU instructions available in the Docker runtime. Measurably faster than the standard library even without AVX512/SHA-NI hardware extensions.
 - **Massive File Support**: "Disk-to-Disk" streaming architecture leverages shared Docker volumes to bypass HTTP network bottlenecks, processing multi-gigabyte files with flat memory usage and native SSD speed.
 - **Buffered I/O**: Output CSV is written via an 8MB `bufio.Writer`, batching kernel syscalls from thousands down to ~375 for a 3GB file.
 - **Go Backend**: Compiled Golang binary with goroutine-based concurrency, an ordered futures pattern for correct CSV output, and a backpressure queue to prevent OOM on massive files.

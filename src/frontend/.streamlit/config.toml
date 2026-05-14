@@ -1,0 +1,9 @@
+[server]
+# Maximum time in seconds that the server waits for a message from the browser.
+# Default is 60s which is far too short for processing multi-gigabyte files.
+# Set to 0 to disable the timeout entirely.
+maxMessageSize = 200
+enableWebsocketCompression = true
+
+[browser]
+gatherUsageStats = false

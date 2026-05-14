@@ -3,7 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
+	sha256 "github.com/minio/sha256-simd"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
