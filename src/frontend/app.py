@@ -13,7 +13,7 @@ try:
     # Convert to base64 for perfect HTML centering
     with open(logo_path, "rb") as f:
         logo_base64 = base64.b64encode(f.read()).decode()
-    logo_html = f'<img src="data:image/png;base64,{logo_base64}" width="80" style="margin-right: 20px;">'
+    logo_html = f'<img src="data:image/png;base64,{logo_base64}" width="112" style="margin-right: 20px;">'
 except:
     logo_img = "🏮"
     logo_html = '<span style="font-size: 50px; margin-right: 20px;">🏮</span>'
@@ -127,6 +127,11 @@ with tab2:
     uploaded_file = st.file_uploader("Or upload a text file:", type=["txt", "csv", "log"])
     
     if uploaded_file:
+        # Auto-reset if a new file is uploaded
+        if st.session_state.get("last_uploaded_filename") != uploaded_file.name:
+            st.session_state.download_file_path = None
+            st.session_state.last_uploaded_filename = uploaded_file.name
+
         st.info("File uploaded. Click below to begin streaming.")
         
         if st.button("Process & Prepare Download", key="process_file_btn"):
@@ -140,12 +145,47 @@ with tab2:
                 temp_file.write(b"Original,SHA-256 Hash\n")
                 
                 try:
+                    progress_text = "Analyzing file and preparing stream..."
+                    progress_bar = st.progress(0, text=progress_text)
+                    
+                    # Count total lines for accurate progress bar
+                    uploaded_file.seek(0)
+                    total_lines = 0
+                    while True:
+                        buf = uploaded_file.read(1024 * 1024) # 1MB chunks
+                        if not buf: break
+                        total_lines += buf.count(b"\n")
+                    uploaded_file.seek(0)
+                    
+                    if total_lines == 0: total_lines = 1 # Prevent division by zero
+                    
+                    import time
+                    start_time = time.time()
+                    lines_processed = 0
+                    last_update = 0
+                    
                     with httpx.stream("POST", f"{BACKEND_URL}/hash/file", files={"file": ("upload.txt", uploaded_file, "text/plain")}, timeout=None) as r:
                         if r.status_code == 200:
                             for chunk in r.iter_bytes(chunk_size=8192):
                                 temp_file.write(chunk)
+                                lines_processed += chunk.count(b"\n")
+                                
+                                # Update UI every 10k lines to balance performance and feedback
+                                if lines_processed - last_update >= 10000:
+                                    elapsed = time.time() - start_time
+                                    speed = lines_processed / elapsed if elapsed > 0 else 0
+                                    eta = (total_lines - lines_processed) / speed if speed > 0 else 0
+                                    
+                                    progress_bar.progress(
+                                        min(lines_processed / total_lines, 1.0), 
+                                        text=f"Processed {lines_processed:,} / {total_lines:,} lines | {speed:,.0f} lines/s | ETA: {eta:,.0f}s"
+                                    )
+                                    last_update = lines_processed
+                            
                             temp_file.close()
                             st.session_state.download_file_path = temp_file.name
+                            total_elapsed = time.time() - start_time
+                            progress_bar.progress(1.0, text=f"Complete! {lines_processed:,} lines in {total_elapsed:.1f}s.")
                         else:
                             st.error(f"Error: {r.read().decode()}")
                 except Exception as e:
@@ -155,14 +195,17 @@ with tab2:
         if st.session_state.get("download_file_path"):
             import os
             if os.path.exists(st.session_state.download_file_path):
-                st.success("Processing complete! Ready for download.")
-                with open(st.session_state.download_file_path, "rb") as f:
-                    st.download_button(
-                        label="Download Processed File",
-                        data=f,
-                        file_name="hashes.csv",
-                        mime="text/csv"
-                    )
+                with st.container():
+                    st.success("Processing complete! Ready for download.")
+                    st.info("💡 Note: For large files (10MB+), your browser may appear unresponsive for a few moments after clicking download while the file is prepared.")
+                    
+                    with open(st.session_state.download_file_path, "rb") as f:
+                        st.download_button(
+                            label="Download Processed File",
+                            data=f,
+                            file_name="hashes.csv",
+                            mime="text/csv"
+                        )
         
     elif bulk_input:
         if st.button("Process Bulk Request", key="bulk_hash_btn"):
