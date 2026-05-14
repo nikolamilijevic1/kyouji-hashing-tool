@@ -11,9 +11,9 @@ logging.basicConfig(
     ]
 )
 
-logger = logging.getLogger("forensic_tool")
+logger = logging.getLogger("kyouji_tool")
 
-def log_forensic_event(request: Request, items_processed: int):
+def log_hashing_event(request: Request, items_processed: int):
     """
     Logs forensic events without recording plaintext input or hashes.
     """
@@ -21,5 +21,5 @@ def log_forensic_event(request: Request, items_processed: int):
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())
     
     logger.info(
-        f"Forensic Event: Timestamp={timestamp}, IP={client_ip}, ItemsProcessed={items_processed}"
+        f"Hashing Event: Timestamp={timestamp}, IP={client_ip}, ItemsProcessed={items_processed}"
     )

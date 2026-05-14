@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: src/backend/Dockerfile
-    container_name: forensic-backend
+    container_name: kyouji-backend
     ports:
       - "8000:8000"
     env_file:
@@ -14,7 +14,7 @@ services:
     build:
       context: .
       dockerfile: src/frontend/Dockerfile
-    container_name: forensic-frontend
+    container_name: kyouji-frontend
     ports:
       - "8501:8501"
     environment:

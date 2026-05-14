@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, HTTPException, File, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from backend.logic import generate_hash, _hash_worker
-from backend.logger import log_forensic_event
+from backend.logger import log_hashing_event
 import os
 
 @asynccontextmanager
@@ -57,7 +57,7 @@ async def hash_single(request: Request, body: HashRequest):
     """
     try:
         result = generate_hash(body.data)
-        log_forensic_event(request, items_processed=1)
+        log_hashing_event(request, items_processed=1)
         return HashResponse(hash=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -148,7 +148,7 @@ async def _process_hashing(request: Request, data_list: List[str]):
         # Flatten the list of lists
         results = [item for sublist in chunked_results for item in sublist]
         
-        log_forensic_event(request, items_processed=len(data_list))
+        log_hashing_event(request, items_processed=len(data_list))
         return BulkHashResponse(hashes=results)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
