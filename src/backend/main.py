@@ -46,6 +46,10 @@ class HashResponse(BaseModel):
 class BulkHashResponse(BaseModel):
     hashes: List[str]
 
+class DiskHashRequest(BaseModel):
+    input_file: str
+    output_file: str
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
@@ -125,6 +129,67 @@ async def hash_file(request: Request, file: UploadFile = File(...)):
                 yield chunk_output
                     
     return StreamingResponse(stream_row_hashing(), media_type="text/csv")
+
+@app.post("/hash/file/disk")
+async def hash_file_disk(request: Request, body: DiskHashRequest):
+    """
+    Generate SHA-256 hashes using Disk-to-Disk architecture to avoid network bottleneck.
+    Reads from /app/shared/{input_file} and writes to /app/shared/{output_file}.
+    Yields JSON progress updates.
+    """
+    async def process_disk_to_disk():
+        loop = asyncio.get_running_loop()
+        executor = request.app.state.executor
+        chunk_size = 1024 * 1024
+        remainder = b""
+        lines_processed = 0
+        
+        input_path = f"/app/shared/{body.input_file}"
+        output_path = f"/app/shared/{body.output_file}"
+        
+        try:
+            with open(input_path, "rb") as fin, open(output_path, "wb") as fout:
+                fout.write(b"Original,SHA-256 Hash\n")
+                
+                while True:
+                    chunk = fin.read(chunk_size)
+                    if not chunk:
+                        if remainder:
+                            clean_line = remainder.decode('utf-8', errors='ignore').strip()
+                            if clean_line:
+                                hashed = await loop.run_in_executor(executor, _hash_worker, clean_line)
+                                fout.write(f"{clean_line},{hashed}\n".encode('utf-8'))
+                                lines_processed += 1
+                                yield f'{{"processed": {lines_processed}}}\n'
+                        break
+                        
+                    lines = (remainder + chunk).split(b"\n")
+                    remainder = lines.pop()
+                    
+                    str_lines = [line.decode('utf-8', errors='ignore').strip() for line in lines if line.strip()]
+                    
+                    if str_lines:
+                        batch_size = max(1000, len(str_lines) // MAX_HASH_WORKERS)
+                        batches = [str_lines[i:i + batch_size] for i in range(0, len(str_lines), batch_size)]
+                        
+                        tasks = [
+                            loop.run_in_executor(executor, _hash_chunk_sequentially, batch)
+                            for batch in batches
+                        ]
+                        
+                        batch_results = await asyncio.gather(*tasks)
+                        chunk_hashes = [h for sublist in batch_results for h in sublist]
+                        
+                        chunk_output = "".join([f"{orig},{h}\n" for orig, h in zip(str_lines, chunk_hashes)])
+                        fout.write(chunk_output.encode('utf-8'))
+                        
+                        lines_processed += len(str_lines)
+                        yield f'{{"processed": {lines_processed}}}\n'
+        finally:
+            if os.path.exists(input_path):
+                os.remove(input_path)
+                
+    return StreamingResponse(process_disk_to_disk(), media_type="application/json")
 
 def _hash_chunk_sequentially(chunk: List[str]) -> List[str]:
     """Helper function to hash a chunk sequentially without spawning new threads."""

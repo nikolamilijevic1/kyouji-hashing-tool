@@ -144,42 +144,52 @@ with tab2:
                 import tempfile
                 import os
                 import uuid
+                import json
                 
                 uploaded_file.seek(0)
                 file_id = str(uuid.uuid4())
                 static_dir = "/app/shared"
                 os.makedirs(static_dir, exist_ok=True)
                 download_filename = f"{file_id}_hashes.csv"
-                download_path = os.path.join(static_dir, download_filename)
+                input_filename = f"input_{file_id}.txt"
+                input_path = os.path.join(static_dir, input_filename)
                 
-                temp_file = open(download_path, "wb")
-                temp_file.write(b"Original,SHA-256 Hash\n")
+                progress_text = "Saving uploaded file to shared disk..."
+                progress_bar = st.progress(0, text=progress_text)
                 
-                try:
-                    progress_text = "Analyzing file and preparing stream..."
-                    progress_bar = st.progress(0, text=progress_text)
-                    
-                    # Count total lines for accurate progress bar
-                    uploaded_file.seek(0)
-                    total_lines = 0
+                total_lines = 0
+                with open(input_path, "wb") as f_out:
                     while True:
                         buf = uploaded_file.read(1024 * 1024) # 1MB chunks
                         if not buf: break
+                        f_out.write(buf)
                         total_lines += buf.count(b"\n")
-                    uploaded_file.seek(0)
-                    
-                    if total_lines == 0: total_lines = 1 # Prevent division by zero
+                
+                if total_lines == 0: total_lines = 1 # Prevent division by zero
+                
+                try:
+                    progress_text = "Analyzing file and hashing on disk..."
+                    progress_bar.progress(0, text=progress_text)
                     
                     import time
                     start_time = time.time()
                     lines_processed = 0
                     last_update = start_time
                     
-                    with httpx.stream("POST", f"{BACKEND_URL}/hash/file", files={"file": ("upload.txt", uploaded_file, "text/plain")}, timeout=None) as r:
+                    payload = {
+                        "input_file": input_filename,
+                        "output_file": download_filename
+                    }
+                    
+                    with httpx.stream("POST", f"{BACKEND_URL}/hash/file/disk", json=payload, timeout=None) as r:
                         if r.status_code == 200:
-                            for chunk in r.iter_bytes(chunk_size=1024 * 1024):
-                                temp_file.write(chunk)
-                                lines_processed += chunk.count(b"\n")
+                            for chunk in r.iter_lines():
+                                if not chunk: continue
+                                try:
+                                    data = json.loads(chunk)
+                                    lines_processed = data.get("processed", lines_processed)
+                                except:
+                                    pass
                                 
                                 # Update UI every 0.5 seconds to balance performance and feedback
                                 current_time = time.time()
@@ -194,7 +204,6 @@ with tab2:
                                     )
                                     last_update = current_time
                             
-                            temp_file.close()
                             st.session_state.download_file_name = download_filename
                             total_elapsed = time.time() - start_time
                             progress_bar.progress(1.0, text=f"Complete! {lines_processed:,} lines in {total_elapsed:.1f}s.")

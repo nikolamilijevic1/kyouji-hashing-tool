@@ -7,7 +7,7 @@ A tool for generating deterministic SHA-256 hashes. Used for data redaction and 
 ## Features
 - **Deterministic Hashing**: SHA-256 implementation that strips leading/trailing whitespace before hashing.
 - **Bulk Processing**: Multi-core hashing for large lists of strings using `ProcessPoolExecutor`.
-- **Massive File Support**: Zero-disk streaming architecture supports processing multi-gigabyte files without memory crashes.
+- **Massive File Support**: "Disk-to-Disk" streaming architecture leverages shared volumes to bypass HTTP network bottlenecks, supporting processing multi-gigabyte files with flat memory usage and native disk speed.
 - **API Access**: FastAPI endpoints for single and bulk hashing operations.
 - **Verification Suite**: Build-time logic and API integrity checks.
 
