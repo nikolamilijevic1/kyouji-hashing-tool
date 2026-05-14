@@ -5,7 +5,7 @@ requires-python = ">=3.13"
 dependencies = []
 
 [tool.uv]
-workspace = { members = ["src/backend", "src/frontend"] }
+workspace = { members = ["src/frontend"] }
 
 [dependency-groups]
 dev = [

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -54,10 +55,10 @@ func getEnvAsInt(key string, fallback int) int {
 	return fallback
 }
 
-// Worker function to hash a single string with whitespace stripping
-func hashString(data string) string {
-	cleanData := strings.TrimSpace(data)
-	hash := sha256.Sum256([]byte(cleanData))
+// Worker function to hash a byte slice directly
+func hashBytes(data []byte) string {
+	cleanData := bytes.TrimSpace(data)
+	hash := sha256.Sum256(cleanData)
 	return hex.EncodeToString(hash[:])
 }
 
@@ -77,9 +78,13 @@ func hashSingleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp := HashResponse{Hash: hashString(req.Data)}
+	resp := HashResponse{Hash: hashStringCompat(req.Data)}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func hashStringCompat(data string) string {
+	return hashBytes([]byte(data))
 }
 
 func hashBulkHandler(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +113,7 @@ func hashBulkHandler(w http.ResponseWriter, r *http.Request) {
 		semaphore <- struct{}{}
 		go func(idx int, d string) {
 			defer wg.Done()
-			hashes[idx] = hashString(d)
+			hashes[idx] = hashStringCompat(d)
 			<-semaphore
 		}(i, data)
 	}
@@ -140,8 +145,8 @@ func hashFileDiskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sharedDir := getEnv("SHARED_DIR", "/app/shared/")
-	inputPath := filepath.Join(sharedDir, req.InputFile)
-	outputPath := filepath.Join(sharedDir, req.OutputFile)
+	inputPath := filepath.Join(sharedDir, filepath.Base(req.InputFile))
+	outputPath := filepath.Join(sharedDir, filepath.Base(req.OutputFile))
 
 	inFile, err := os.Open(inputPath)
 	if err != nil {
@@ -159,9 +164,15 @@ func hashFileDiskHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Could not create output file", http.StatusInternalServerError)
 		return
 	}
-	defer outFile.Close()
+	// Wrap output in an 8MB buffered writer to batch OS syscalls.
+	// Without this, every chunk write triggers a kernel syscall, which is extremely expensive at scale.
+	bufWriter := bufio.NewWriterSize(outFile, 8*1024*1024)
+	defer func() {
+		bufWriter.Flush() // Flush remaining bytes to disk before closing
+		outFile.Close()
+	}()
 
-	_, err = outFile.WriteString("Original,SHA-256 Hash\n")
+	_, err = bufWriter.WriteString("Original,SHA-256 Hash\n")
 	if err != nil {
 		http.Error(w, "Could not write to output file", http.StatusInternalServerError)
 		return
@@ -172,18 +183,18 @@ func hashFileDiskHandler(w http.ResponseWriter, r *http.Request) {
 	if numWorkers < 1 {
 		numWorkers = 1
 	}
-	
+
 	// ARCHITECTURE NOTE: BATCH SIZE & QUEUE SIZE
-	// Why 5000 (Batch Size)? 
-	// Spawning a goroutine for every single line is inefficient due to context switching. 
+	// Why 5000 (Batch Size)?
+	// Spawning a goroutine for every single line is inefficient due to context switching.
 	// Grouping 5000 lines ensures each CPU core has enough work to do per routine.
 	// Increasing this heavily will cause memory spikes; decreasing it will increase CPU overhead.
 	//
 	// Why 1000 (Queue Size)?
-	// The futures channel acts as critical Backpressure. Since we must preserve exact CSV row 
-	// ordering, we have a single sequential Writer goroutine. If the CPU hashes faster than the SSD 
+	// The futures channel acts as critical Backpressure. Since we must preserve exact CSV row
+	// ordering, we have a single sequential Writer goroutine. If the CPU hashes faster than the SSD
 	// can write, the results pile up in RAM. A queue of 1000 limits the backlog to ~5 million lines.
-	// Increasing this risks an Out-Of-Memory (OOM) crash on massive files. Decreasing this risks 
+	// Increasing this risks an Out-Of-Memory (OOM) crash on massive files. Decreasing this risks
 	// starving the CPU workers while they wait for the single slow disk writer.
 	//
 	// LIMITATIONS:
@@ -191,22 +202,22 @@ func hashFileDiskHandler(w http.ResponseWriter, r *http.Request) {
 	batchSize := getEnvAsInt("HASH_BATCH_SIZE", 5000)
 	semaphore := make(chan struct{}, numWorkers)
 
-	queueSize := getEnvAsInt("MAX_QUEUE_SIZE", 1000)
+	queueSize := getEnvAsInt("MAX_QUEUE_SIZE", 4000)
 	// Channel to maintain order of futures
 	futures := make(chan chan string, queueSize)
 
 	// Writer goroutine
 	writeDone := make(chan struct{})
 	linesProcessed := 0
-	
+
 	go func() {
 		for future := range futures {
 			chunkOutput := <-future
-			outFile.WriteString(chunkOutput)
-			
+			bufWriter.WriteString(chunkOutput)
+
 			// Count newlines to determine lines processed in this chunk
 			linesProcessed += strings.Count(chunkOutput, "\n")
-			
+
 			// Stream JSON update
 			progressUpdate := fmt.Sprintf("{\"processed\": %d}\n", linesProcessed)
 			w.Write([]byte(progressUpdate))
@@ -221,21 +232,23 @@ func hashFileDiskHandler(w http.ResponseWriter, r *http.Request) {
 	buf := make([]byte, 1024*1024)
 	scanner.Buffer(buf, maxLineMB*1024*1024)
 
-	var currentBatch []string
+	var currentBatch [][]byte
 
-	dispatchBatch := func(batch []string) {
+	dispatchBatch := func(batch [][]byte) {
 		future := make(chan string, 1)
 		futures <- future
 		semaphore <- struct{}{}
-		
-		go func(b []string, f chan string) {
+
+		go func(b [][]byte, f chan string) {
 			defer func() { <-semaphore }()
 			var sb strings.Builder
-			for _, line := range b {
-				cleanLine := strings.TrimSpace(line)
-				if cleanLine != "" {
-					hash := hashString(cleanLine)
-					sb.WriteString(cleanLine + "," + hash + "\n")
+			for _, lineBytes := range b {
+				if len(lineBytes) > 0 {
+					hash := hashBytes(lineBytes)
+					sb.Write(lineBytes)
+					sb.WriteString(",")
+					sb.WriteString(hash)
+					sb.WriteString("\n")
 				}
 			}
 			f <- sb.String()
@@ -244,14 +257,20 @@ func hashFileDiskHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for scanner.Scan() {
-		line := scanner.Text()
-		currentBatch = append(currentBatch, line)
-		if len(currentBatch) >= batchSize {
-			dispatchBatch(currentBatch)
-			currentBatch = nil // allocate new slice next loop
+		rawBytes := scanner.Bytes()
+		cleanLine := bytes.TrimSpace(rawBytes)
+		if len(cleanLine) > 0 {
+			// We MUST copy the bytes because scanner.Bytes() is volatile and will be overwritten
+			// Using bytes.Clone leverages Go 1.20+ internal optimizations
+			lineCopy := bytes.Clone(cleanLine)
+			currentBatch = append(currentBatch, lineCopy)
+			if len(currentBatch) >= batchSize {
+				dispatchBatch(currentBatch)
+				currentBatch = nil // allocate new slice next loop
+			}
 		}
 	}
-	
+
 	if len(currentBatch) > 0 {
 		dispatchBatch(currentBatch)
 	}
@@ -274,22 +293,23 @@ func downloadFileHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Filename required", http.StatusBadRequest)
 		return
 	}
-	
+
 	sharedDir := getEnv("SHARED_DIR", "/app/shared/")
-	filePath := filepath.Join(sharedDir, filename)
+	safeFilename := filepath.Base(filename)
+	filePath := filepath.Join(sharedDir, safeFilename)
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/csv")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", safeFilename))
 	http.ServeFile(w, r, filePath)
 }
 
 func main() {
 	mux := http.NewServeMux()
-	
+
 	mux.HandleFunc("/health", healthCheckHandler)
 	mux.HandleFunc("/hash", hashSingleHandler)
 	mux.HandleFunc("/hash/bulk", hashBulkHandler)

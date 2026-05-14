@@ -1,27 +1,24 @@
 # Stage 1: Builder
-FROM python:3.13-slim-bookworm AS builder
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+FROM golang:1.22-alpine AS builder
 
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
-COPY src/backend/pyproject.toml ./src/backend/
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package backend
 
-# Stage 2: Tester
-FROM builder AS tester
-COPY tests/ ./tests
-COPY src/backend/*.py ./src/backend/
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv run pytest tests/ && touch /tmp/tests_passed
+# --- Dependency Layer (cached until go.mod/go.sum change) ---
+# Copy dependency files first so Docker caches the downloaded modules.
+# Changes to main.go will NOT re-trigger this expensive download step.
+COPY src/backend/go.mod ./
+COPY src/backend/go.sum ./
+RUN go mod download
 
-# Stage 3: Runner
-FROM python:3.13-slim-bookworm
+# --- Source Layer (only re-triggers go build) ---
+COPY src/backend/main.go ./
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o kyouji-backend main.go
+
+# Stage 2: Runner
+FROM alpine:latest
+
 WORKDIR /app
-COPY --from=tester /tmp/tests_passed /tmp/tests_passed
-COPY --from=builder /app/.venv /app/.venv
-COPY src/backend/*.py /app/backend/
-ENV PATH="/app/.venv/bin:$PATH"
+COPY --from=builder /app/kyouji-backend .
+
 EXPOSE 8000
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["./kyouji-backend"]
