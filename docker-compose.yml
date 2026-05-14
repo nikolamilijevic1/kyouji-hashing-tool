@@ -6,6 +6,8 @@ services:
     container_name: kyouji-backend
     ports:
       - "8000:8000"
+    volumes:
+      - shared_workspace:/app/shared
     env_file:
       - .env
     restart: always
@@ -17,8 +19,14 @@ services:
     container_name: kyouji-frontend
     ports:
       - "8501:8501"
+    volumes:
+      - shared_workspace:/app/shared
     environment:
       - BACKEND_URL=http://backend:8000
+      - PUBLIC_BACKEND_URL=${PUBLIC_BACKEND_URL:-http://localhost:8000}
     depends_on:
       - backend
     restart: always
+
+volumes:
+  shared_workspace:

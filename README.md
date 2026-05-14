@@ -12,9 +12,10 @@ A tool for generating deterministic SHA-256 hashes. Used for data redaction and 
 - **Verification Suite**: Build-time logic and API integrity checks.
 
 ## Configuration
-Tuning parameters available in `.env`:
+Tuning parameters available in `.env` (or via standard environment variables):
 - `MAX_HASH_WORKERS`: Number of parallel workers (detected automatically with 1-core headroom).
 - `HASH_CHUNK_SIZE`: Task distribution size per worker (calculated dynamically).
+- `PUBLIC_BACKEND_URL`: External URL of the backend (e.g., `http://192.168.1.50:8000`). Default is `http://localhost:8000`. Used to correctly route direct file downloads when deployed on a remote server.
 
 ## Project Structure
 - `backend/`: FastAPI application and isolated dependencies.

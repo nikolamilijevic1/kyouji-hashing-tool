@@ -82,6 +82,7 @@ st.markdown("Redact sensitive data or verify integrity using deterministic SHA-2
 
 # Backend URL configuration
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+PUBLIC_BACKEND_URL = os.getenv("PUBLIC_BACKEND_URL", "http://localhost:8000")
 
 # Sidebar for configuration/info
 with st.sidebar:
@@ -129,7 +130,10 @@ with tab2:
     if uploaded_file:
         # Auto-reset if a new file is uploaded
         if st.session_state.get("last_uploaded_filename") != uploaded_file.name:
-            st.session_state.download_file_path = None
+            if "download_file_path" in st.session_state:
+                del st.session_state["download_file_path"]
+            if "download_file_name" in st.session_state:
+                del st.session_state["download_file_name"]
             st.session_state.last_uploaded_filename = uploaded_file.name
 
         st.info("File uploaded. Click below to begin streaming.")
@@ -139,9 +143,16 @@ with tab2:
                 import httpx
                 import tempfile
                 import os
+                import uuid
                 
                 uploaded_file.seek(0)
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb")
+                file_id = str(uuid.uuid4())
+                static_dir = "/app/shared"
+                os.makedirs(static_dir, exist_ok=True)
+                download_filename = f"{file_id}_hashes.csv"
+                download_path = os.path.join(static_dir, download_filename)
+                
+                temp_file = open(download_path, "wb")
                 temp_file.write(b"Original,SHA-256 Hash\n")
                 
                 try:
@@ -162,17 +173,18 @@ with tab2:
                     import time
                     start_time = time.time()
                     lines_processed = 0
-                    last_update = 0
+                    last_update = start_time
                     
                     with httpx.stream("POST", f"{BACKEND_URL}/hash/file", files={"file": ("upload.txt", uploaded_file, "text/plain")}, timeout=None) as r:
                         if r.status_code == 200:
-                            for chunk in r.iter_bytes(chunk_size=8192):
+                            for chunk in r.iter_bytes(chunk_size=1024 * 1024):
                                 temp_file.write(chunk)
                                 lines_processed += chunk.count(b"\n")
                                 
-                                # Update UI every 10k lines to balance performance and feedback
-                                if lines_processed - last_update >= 10000:
-                                    elapsed = time.time() - start_time
+                                # Update UI every 0.5 seconds to balance performance and feedback
+                                current_time = time.time()
+                                if current_time - last_update >= 0.5:
+                                    elapsed = current_time - start_time
                                     speed = lines_processed / elapsed if elapsed > 0 else 0
                                     eta = (total_lines - lines_processed) / speed if speed > 0 else 0
                                     
@@ -180,10 +192,10 @@ with tab2:
                                         min(lines_processed / total_lines, 1.0), 
                                         text=f"Processed {lines_processed:,} / {total_lines:,} lines | {speed:,.0f} lines/s | ETA: {eta:,.0f}s"
                                     )
-                                    last_update = lines_processed
+                                    last_update = current_time
                             
                             temp_file.close()
-                            st.session_state.download_file_path = temp_file.name
+                            st.session_state.download_file_name = download_filename
                             total_elapsed = time.time() - start_time
                             progress_bar.progress(1.0, text=f"Complete! {lines_processed:,} lines in {total_elapsed:.1f}s.")
                         else:
@@ -192,20 +204,34 @@ with tab2:
                     st.error(f"Failed to stream to backend: {e}")
 
         # The download button must be outside the process block so it doesn't disappear on click
-        if st.session_state.get("download_file_path"):
-            import os
-            if os.path.exists(st.session_state.download_file_path):
-                with st.container():
-                    st.success("Processing complete! Ready for download.")
-                    st.info("💡 Note: For large files (10MB+), your browser may appear unresponsive for a few moments after clicking download while the file is prepared.")
-                    
-                    with open(st.session_state.download_file_path, "rb") as f:
-                        st.download_button(
-                            label="Download Processed File",
-                            data=f,
-                            file_name="hashes.csv",
-                            mime="text/csv"
-                        )
+        if st.session_state.get("download_file_name"):
+            with st.container():
+                st.success("Processing complete! Ready for download.")
+                st.info("💡 Note: For large files (10MB+), your browser may appear unresponsive for a few moments after clicking download while the file is prepared.")
+                
+                download_url = f"{PUBLIC_BACKEND_URL}/download/{st.session_state.download_file_name}"
+                st.markdown(f'''
+                    <a href="{download_url}" style="
+                        display: block;
+                        background-color: #1e4620;
+                        color: #73d085;
+                        padding: 10px 24px;
+                        text-align: center;
+                        text-decoration: none;
+                        font-size: 16px;
+                        font-weight: 600;
+                        border-radius: 8px;
+                        border: 1px solid #1e4620;
+                        transition: all 0.3s ease;
+                        margin-top: 10px;
+                    " onmouseover="this.style.backgroundColor='#1a3d1c'; this.style.transform='translateY(-2px)'" onmouseout="this.style.backgroundColor='#1e4620'; this.style.transform='translateY(0)'">
+                        Download Processed File
+                    </a>
+                ''', unsafe_allow_html=True)
+                
+                # Prevent rerun crashes when the UI updates again
+                if "download_file_path" in st.session_state:
+                    del st.session_state["download_file_path"]
         
     elif bulk_input:
         if st.button("Process Bulk Request", key="bulk_hash_btn"):

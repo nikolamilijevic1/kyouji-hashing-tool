@@ -50,6 +50,17 @@ class BulkHashResponse(BaseModel):
 async def health_check():
     return {"status": "healthy"}
 
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """
+    Serve a massive processed file directly using FastAPI's high-performance asynchronous FileResponse.
+    """
+    from fastapi.responses import FileResponse
+    file_path = f"/app/shared/{filename}"
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="text/csv", filename="hashes.csv")
+    raise HTTPException(status_code=404, detail="File not found")
+
 @app.post("/hash", response_model=HashResponse)
 async def hash_single(request: Request, body: HashRequest):
     """
@@ -110,8 +121,8 @@ async def hash_file(request: Request, file: UploadFile = File(...)):
                 batch_results = await asyncio.gather(*tasks)
                 chunk_hashes = [h for sublist in batch_results for h in sublist]
                 
-                for orig, h in zip(str_lines, chunk_hashes):
-                    yield f"{orig},{h}\n"
+                chunk_output = "".join([f"{orig},{h}\n" for orig, h in zip(str_lines, chunk_hashes)])
+                yield chunk_output
                     
     return StreamingResponse(stream_row_hashing(), media_type="text/csv")
 
