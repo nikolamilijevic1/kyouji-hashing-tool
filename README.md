@@ -1,3 +1,5 @@
+*Kyouji (矜持) is a Japanese term for professional pride and inner dignity. In this service, it represents the unwavering integrity of the SHA-256 algorithm. Like a person with 'Kyouji', the hash remains constant, truthful, and dignified, regardless of external attempts to alter its core truth.*
+
 # Kyouji: SHA-256 Hashing & Redaction Service
 
 A high-performance Go-based service for deterministic SHA-256 hashing. Designed for processing multi-gigabyte datasets with fixed memory overhead and bit-for-bit reproducibility.
