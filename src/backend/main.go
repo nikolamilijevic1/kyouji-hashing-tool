@@ -59,7 +59,7 @@ func getEnvAsInt(key string, fallback int) int {
 func hashBytes(data []byte) string {
 	cleanData := bytes.TrimSpace(data)
 	hash := sha256.Sum256(cleanData)
-	return hex.EncodeToString(hash[:])
+	return "RCMP_REDACT_" + hex.EncodeToString(hash[:])
 }
 
 // Handlers
