@@ -1,91 +1,62 @@
-# Kyouji: Hashing & Redaction Tool
+# Kyouji: SHA-256 Hashing & Redaction Service
 
-*Kyouji (矜持) is a Japanese term for professional pride and inner dignity. In this service, it represents the unwavering integrity of the SHA-256 algorithm. Like a person with 'Kyouji', the hash remains constant, truthful, and dignified, regardless of external attempts to alter its core truth.*
+A high-performance Go-based service for deterministic SHA-256 hashing. Designed for processing multi-gigabyte datasets with fixed memory overhead and bit-for-bit reproducibility.
 
-A high-performance tool for generating deterministic SHA-256 hashes at scale. Used for data redaction and verification across multi-gigabyte datasets, ensuring consistency via whitespace stripping.
+## Technical Architecture
 
-## Features
-- **Deterministic Hashing**: SHA-256 implementation that strips leading/trailing whitespace before hashing. Output is bit-for-bit reproducible.
-- **SIMD-Accelerated Hashing**: Uses `minio/sha256-simd` which leverages AVX2 CPU instructions available in the Docker runtime. Measurably faster than the standard library even without AVX512/SHA-NI hardware extensions.
-- **Massive File Support**: "Disk-to-Disk" streaming architecture leverages shared Docker volumes to bypass HTTP network bottlenecks, processing multi-gigabyte files with flat memory usage and native SSD speed.
-- **Buffered I/O**: Output CSV is written via an 8MB `bufio.Writer`, batching kernel syscalls from thousands down to ~375 for a 3GB file.
-- **Go Backend**: Compiled Golang binary with goroutine-based concurrency, an ordered futures pattern for correct CSV output, and a backpressure queue to prevent OOM on massive files.
-- **API Access**: HTTP endpoints for single hashing, bulk hashing, disk-to-disk file processing, and direct file downloads.
+### Concurrency & Performance
+- **SIMD Acceleration**: Utilizes `minio/sha256-simd` to leverage AVX2, AVX512, and SHA-NI hardware instructions.
+- **Concurrent Hashing**: Distributes workload across `runtime.NumCPU()` goroutines using a semaphore-controlled worker pool.
+- **Ordered Futures**: Implements a buffered channel-of-channels pattern to ensure output CSV rows maintain the exact order of the input file despite concurrent processing.
+- **Backpressure**: The `MAX_QUEUE_SIZE` parameter acts as a flow-control mechanism, slowing the input scanner if the disk writer or CPU workers cannot keep pace, preventing OOM crashes.
+
+### I/O Optimization
+- **Disk-to-Disk Processing**: Leverages shared Docker volumes to read and write files directly to the filesystem. This bypasses the memory and network overhead of uploading/downloading multi-GB files via HTTP.
+- **Buffered I/O**: 
+  - **Reads**: Uses `bufio.Scanner` with a configurable buffer (default 10MB) to handle extremely long lines.
+  - **Writes**: Wraps the output file in an 8MB `bufio.Writer` to batch kernel write syscalls, significantly reducing context-switching overhead.
+- **Deterministic Output**: Strips leading/trailing whitespace (`bytes.TrimSpace`) before hashing. All hashes are prepended with the `RCMP_REDACT_` prefix.
 
 ## Configuration
-All tuning parameters are available via standard environment variables. All values have safe defaults:
+
+Tuning parameters are managed via environment variables in the `.env` file:
 
 | Variable | Default | Description |
 |---|---|---|
-| `PUBLIC_BACKEND_URL` | `http://localhost:8000` | External URL of backend, used by frontend for download links. Set this for remote/LAN deployments. |
-| `SHARED_DIR` | `/app/shared/` | Shared volume path for disk-to-disk file transfers. |
-| `HASH_BATCH_SIZE` | `5000` | Lines per goroutine batch. Higher = more RAM; Lower = more CPU overhead. |
-| `MAX_QUEUE_SIZE` | `1000` | Ordered futures backpressure limit. Caps RAM backlog to ~5M lines. |
-| `MAX_LINE_MB` | `10` | Maximum single-line size the scanner will accept (in MB). |
-| `PORT` | `8000` | Backend server port. |
+| `HASH_BATCH_SIZE` | `5000` | Number of lines per goroutine batch. |
+| `MAX_QUEUE_SIZE` | `4000` | Backpressure limit for the ordered futures queue. |
+| `MAX_LINE_MB` | `10` | Maximum allowed line size for the input scanner. |
+| `SHARED_DIR` | `/app/shared/` | Mount point for the shared Docker volume. |
+| `PORT` | `8000` | HTTP server port. |
 
-## Project Structure
-- `src/backend/`: Compiled Go HTTP server (`main.go`, `go.mod`, `go.sum`).
-- `src/frontend/`: Streamlit dashboard and isolated Python dependencies.
-- `tests/`: Test suite for logic and API integrity.
-- `pyproject.toml`: Root uv workspace manager (frontend only).
-- `uv.lock`: Unified lock file for the frontend workspace.
+## Deployment
 
-## Local Development
-The frontend requires [uv](https://docs.astral.sh/uv/). The backend requires [Go 1.22+](https://go.dev/dl/).
-
+### Docker (Recommended)
+Build and start the backend and Streamlit frontend:
 ```bash
-# Sync the frontend workspace
+docker compose up --build -d
+```
+
+### Local Development
+Requires [uv](https://docs.astral.sh/uv/) for the frontend and [Go 1.22+](https://go.dev/dl/) for the backend.
+```bash
+# Sync frontend dependencies
 uv sync --all-packages
 
-# Run the test suite
+# Run tests
 uv run pytest
 
-# Run the Go backend locally (optional, Docker is preferred)
+# Run Go backend
 cd src/backend && go run main.go
 ```
 
-## Deployment
-Build and start the multi-stage Docker environment:
-```bash
-docker compose up --build
-```
-> **Note:** Docker layer caching is configured correctly — changing `main.go` does not re-download Go dependencies. Only changes to `go.mod` or `go.sum` trigger a fresh `go mod download`.
-
-## Access
-Once the containers are running:
-- **Frontend UI**: [http://localhost:8501](http://localhost:8501)
-- **API Health Check**: [http://localhost:8000/health](http://localhost:8000/health)
-- **Raw API**: [http://localhost:8000](http://localhost:8000)
-
 ## API Reference
 
-### Health Check
-`GET /health`
-```json
-{ "status": "healthy" }
-```
+### Hashing Endpoints
+- `POST /hash`: Single string hashing. Returns JSON.
+- `POST /hash/bulk`: Batch processing of JSON string arrays.
+- `POST /hash/file/disk`: Processes a file from the shared volume. Returns a newline-delimited JSON stream of progress updates (`{"processed": N}`).
 
-### Single Item
-`POST /hash`
-```json
-{ "data": "string_to_hash" }
-```
-
-### Bulk Processing (JSON)
-`POST /hash/bulk`
-```json
-{ "data_list": ["string1", "string2", "string3"] }
-```
-
-### Disk-to-Disk File Processing
-`POST /hash/file/disk`
-Reads from the shared volume, processes concurrently, and streams JSON progress updates back to the caller.
-```json
-{ "input_file": "input_uuid.txt", "output_file": "hashes_uuid.csv" }
-```
-Response stream: `{"processed": 500000}` newline-delimited JSON.
-
-### Direct File Download
-`GET /download/{filename}`
-Streams a file from the shared volume directly to the browser as a `text/csv` attachment. Fully memory-safe via `http.ServeFile`.
+### File Management
+- `GET /download/{filename}`: Streams a file from the shared volume as a `text/csv` attachment using `http.ServeFile`.
+- `GET /health`: Standard health check.
