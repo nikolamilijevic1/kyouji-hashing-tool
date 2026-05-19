@@ -55,14 +55,19 @@ async def health_check():
     return {"status": "healthy"}
 
 @app.get("/download/{filename}")
-async def download_file(filename: str):
+async def download_file(filename: str, original_name: str = "hashes.csv"):
     """
     Serve a massive processed file directly using FastAPI's high-performance asynchronous FileResponse.
     """
     from fastapi.responses import FileResponse
     file_path = f"/app/shared/{filename}"
     if os.path.exists(file_path):
-        return FileResponse(file_path, media_type="text/csv", filename="hashes.csv")
+        # Extract base name and build custom name (e.g., input_hashed.csv)
+        base_name, _ = os.path.splitext(original_name)
+        if base_name.endswith("_hashes"):
+            base_name = base_name[:-7]
+        download_name = f"{base_name}_hashed.csv"
+        return FileResponse(file_path, media_type="text/csv", filename=download_name)
     raise HTTPException(status_code=404, detail="File not found")
 
 @app.post("/hash", response_model=HashResponse)

@@ -22,13 +22,29 @@ st.set_page_config(
     page_title="SHA-256 Hashing Tool",
     page_icon=logo_img,
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 # Custom CSS for premium look and hiding Streamlit elements
 st.markdown("""
     <style>
-    /* Completely remove the top header bar and status indicators */
-    [data-testid="stHeader"] {display: none !important;}
+    /* Make header bar transparent so the sidebar collapse/expand controls are visible */
+    [data-testid="stHeader"] {
+        background: transparent !important;
+        color: #ffffff !important;
+    }
+    
+    /* Style the collapsed sidebar expand control to stand out and match the theme */
+    [data-testid="collapsedSidebarCollapsedControl"] {
+        background-color: #182848 !important;
+        color: #ffffff !important;
+        border-radius: 8px !important;
+        padding: 5px !important;
+        border: 1px solid #4b6cb7 !important;
+        margin-left: 15px !important;
+        margin-top: 10px !important;
+    }
+
     footer {visibility: hidden;}
     #MainMenu {visibility: hidden;}
     .stDeployButton {display:none;}
@@ -66,6 +82,22 @@ st.markdown("""
         margin-top: -50px;
         margin-bottom: 20px;
     }
+    
+    /* Enforce 16px minimum across all text surfaces */
+    p, label, input, textarea, select, ::placeholder,
+    button[role="tab"],
+    div[data-testid="stCaptionContainer"],
+    .stAlert p, table, th, td,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] div {
+        font-size: 16px !important;
+    }
+
+    /* Soft premium grey-blue for caption helper text */
+    div[data-testid="stCaptionContainer"] {
+        color: #cbd5e1 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -78,7 +110,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 st.markdown("### Deterministic Data Integrity & Verification")
-st.markdown("Redact sensitive data or verify integrity using deterministic SHA-256. Built for unshakeable data truth.")
+st.markdown("Redact sensitive data or verify integrity using deterministic SHA-256.")
 
 # Backend URL configuration
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
@@ -100,9 +132,12 @@ tab1, tab2 = st.tabs(["Single Hash", "Bulk Processing"])
 
 with tab1:
     st.subheader("Generate Single Hash")
-    input_text = st.text_input("Enter text to hash:", placeholder="Type your data here...")
+    with st.form(key="single_hash_form", clear_on_submit=False, border=False):
+        input_text = st.text_input("Enter text to hash:", placeholder="Type your data here...")
+        st.caption("Press **Enter** to send hash")
+        submit_single = st.form_submit_button("Generate Hash")
     
-    if st.button("Generate Hash", key="single_hash_btn"):
+    if submit_single:
         if input_text:
             with st.spinner("Processing..."):
                 try:
@@ -124,7 +159,7 @@ with tab1:
 with tab2:
     st.subheader("Bulk Hash Processing")
     st.markdown("Upload a file or paste multiple strings (one per line).")
-    bulk_input = st.text_area("Paste strings here:", height=200, placeholder="String 1\nString 2\nString 3...")
+    
     uploaded_file = st.file_uploader("Or upload a text file:", type=["txt", "csv", "log"])
     
     if uploaded_file:
@@ -218,7 +253,9 @@ with tab2:
                 st.success("Processing complete! Ready for download.")
                 st.info("💡 Note: For large files (10MB+), your browser may appear unresponsive for a few moments after clicking download while the file is prepared.")
                 
-                download_url = f"{PUBLIC_BACKEND_URL}/download/{st.session_state.download_file_name}"
+                import urllib.parse
+                safe_orig_name = urllib.parse.quote(st.session_state.get("last_uploaded_filename", "hashes.csv"))
+                download_url = f"{PUBLIC_BACKEND_URL}/download/{st.session_state.download_file_name}?original_name={safe_orig_name}"
                 st.markdown(f'''
                     <a href="{download_url}" style="
                         display: block;
@@ -242,8 +279,15 @@ with tab2:
                 if "download_file_path" in st.session_state:
                     del st.session_state["download_file_path"]
         
-    elif bulk_input:
-        if st.button("Process Bulk Request", key="bulk_hash_btn"):
+    st.divider()
+    
+    with st.form(key="bulk_paste_form", clear_on_submit=False, border=False):
+        bulk_input = st.text_area("Paste strings here:", height=200, placeholder="String 1\nString 2\nString 3...")
+        st.caption("Press **Ctrl+Enter** to send hash")
+        submit_bulk = st.form_submit_button("Process Bulk Request")
+
+    if submit_bulk:
+        if bulk_input:
             data_list = [line for line in bulk_input.split("\n") if line]
             if data_list:
                 with st.spinner(f"Processing {len(data_list)} items across multiple cores..."):
@@ -274,7 +318,9 @@ with tab2:
                         st.error(f"Failed to connect to backend: {e}")
             else:
                 st.warning("Please provide some input data.")
+        else:
+            st.warning("Please enter some text.")
 
 # Footer
 st.divider()
-st.caption("v2.0 | Deterministic | Third-Party Verifiable | Parallelized")
+st.caption("v2.0")
