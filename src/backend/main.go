@@ -302,8 +302,23 @@ func downloadFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	originalName := r.URL.Query().Get("original_name")
+	downloadName := safeFilename
+	if originalName != "" {
+		baseName := originalName
+		if idx := strings.LastIndex(originalName, "."); idx != -1 {
+			baseName = originalName[:idx]
+		}
+		if strings.HasSuffix(baseName, "_hashes") {
+			baseName = strings.TrimSuffix(baseName, "_hashes")
+		} else if strings.HasSuffix(baseName, "_hashed") {
+			baseName = strings.TrimSuffix(baseName, "_hashed")
+		}
+		downloadName = baseName + "_hashed.csv"
+	}
+
 	w.Header().Set("Content-Type", "text/csv")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", safeFilename))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", downloadName))
 	http.ServeFile(w, r, filePath)
 }
 
