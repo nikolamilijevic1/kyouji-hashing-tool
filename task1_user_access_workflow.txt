@@ -1,0 +1,211 @@
+================================================================================
+TASK 1 — USER ACCESS WORKFLOW DEFINITION
+Hansken Forensic Platform | Centralized Storage Initiative
+Document Version: 1.0 (DRAFT)
+Date: 2026-06-11
+Status: DRAFT — Network Context Section Pending Team Confirmation
+================================================================================
+
+1. PURPOSE
+----------
+This document defines and clarifies the method by which investigators and
+authorized users will access the Hansken forensic platform. It specifies the
+chosen access model, its architectural implications, and the required network
+and security controls. It also provides guidance for updating the architecture
+diagram accordingly.
+
+
+2. DECISION: ACCESS METHOD
+---------------------------
+Selected Method:  DIRECT HTTPS ACCESS
+Rejected Method:  VDI Layer (Virtual Desktop Infrastructure)
+
+Rationale:
+  - Hansken's HUIB (ExpertUI) is a fully browser-based interface. It requires
+    no locally installed software and is designed to be served over HTTPS.
+  - Direct HTTPS access eliminates the cost, licensing, and operational
+    overhead of a VDI layer (e.g., Citrix, VMware Horizon, Azure Virtual
+    Desktop).
+  - Hansken's authentication stack (Keycloak + OpenLDAP) natively supports
+    OIDC/OAuth2, enabling SSO and MFA enforcement without a VDI intermediary.
+  - The official Hansken architecture documentation confirms that the HUIB
+    communicates directly with the Gatekeeper REST API, Keystore, and
+    Preference service over HTTPS.
+
+NOTE: If future requirements change (e.g., classified or air-gapped network
+segments, remote desktop policy mandates), a VDI layer can be introduced as
+an additional ingress tier in front of the HTTPS entry points. This document
+should be revised at that time.
+
+
+3. USER ACCESS FLOW (STEP-BY-STEP)
+------------------------------------
+The following describes the complete access path for an investigator:
+
+Step 1 — Network Entry
+  - Investigator opens a supported web browser on their endpoint device.
+  - The browser navigates to the Hansken HUIB URL (e.g., https://hansken.<domain>/).
+  - Network traffic is encrypted in transit using TLS 1.2 or higher (TLS 1.3
+    preferred).
+  - [PENDING] Network boundary: Confirm whether access is restricted to the
+    internal corporate/agency network, requires VPN, or is internet-facing.
+    See Section 7 (Open Items).
+
+Step 2 — Authentication (Keycloak + OpenLDAP)
+  - The HUIB redirects the user to the Keycloak OIDC login page.
+  - Keycloak federates identity via OpenLDAP (the centralized user directory).
+  - Upon successful credential validation, Keycloak issues a signed JWT
+    (JSON Web Token) / access token to the browser session.
+  - MFA enforcement is applied at the Keycloak layer (method TBD — see
+    Section 7).
+
+Step 3 — Key & Preference Retrieval
+  - After authentication, the HUIB makes HTTPS calls to:
+      a. Keystore service  — retrieves encryption keys required to decrypt
+                             evidence images.
+      b. Preference service — retrieves the investigator's saved UI preferences
+                              and case-level settings.
+
+Step 4 — REST API Access via Gatekeeper
+  - All investigator actions (case browsing, search, viewing trace data) are
+    sent as authenticated HTTPS REST requests to the Gatekeeper service.
+  - The JWT token issued by Keycloak is included in every request header for
+    authorization enforcement.
+  - The Gatekeeper validates the token, then routes the request internally via
+    gRPC to the Lobby-service, which schedules and dispatches to the
+    appropriate core service (Project, Trace, Data, Extraction, etc.).
+
+Step 5 — Data Return
+  - Results (trace metadata, thumbnails, extracted artifacts) are returned
+    from the core services through the Gatekeeper to the HUIB over HTTPS.
+  - Raw forensic image data is never directly surfaced to the browser;
+    only derived, processed trace data is exposed.
+
+
+4. SERVICES EXPOSED OVER HTTPS TO END USERS
+---------------------------------------------
+Per the official Hansken architecture documentation, the following three
+services must be reachable by the HUIB over HTTPS:
+
+  +---------------------+------------------------------------------+---------+
+  | Service             | Role                                     | Port    |
+  +---------------------+------------------------------------------+---------+
+  | Gatekeeper          | Primary REST API entry point             | 443     |
+  | Keystore            | Encryption key management                | 443     |
+  | Preference Service  | User preference persistence              | 443     |
+  +---------------------+------------------------------------------+---------+
+  | Keycloak            | OIDC authentication & authorization      | 443     |
+  +---------------------+------------------------------------------+---------+
+
+All other services (Lobby, Project, Trace, Data, Extraction, etc.) are
+internal-only and communicate via gRPC on port 443 inside the cluster.
+They are NOT directly exposed to end users.
+
+
+5. ENDPOINT / CLIENT REQUIREMENTS
+-----------------------------------
+  - Device Type:     Any managed or unmanaged endpoint with a modern browser.
+                     No Hansken client software installation required.
+  - Browser Support: Chromium-based browsers (Chrome, Edge) recommended.
+                     Firefox supported. Refer to current Hansken release notes
+                     for exact browser compatibility matrix.
+  - TLS:             Client must support TLS 1.2 minimum (TLS 1.3 preferred).
+  - Authentication:  Credentials managed in the centralized OpenLDAP/Keycloak
+                     stack. Investigators do NOT maintain separate Hansken
+                     local accounts.
+  - MFA:             [PENDING] MFA method to be defined — TOTP, hardware token,
+                     or SSO federation with existing agency IdP.
+
+
+6. ARCHITECTURE DIAGRAM — REQUIRED UPDATES
+--------------------------------------------
+Based on the confirmed access model, the following updates are required to the
+existing Hansken architecture diagram (hansken_data_flow_hierarchy.md):
+
+  6.1  CLIENT LAYER
+       - Label:   "HUIB / ExpertUI (Browser — Direct HTTPS)"
+       - Current: "HUIB / ExpertUI (Browser UI)"
+       - Change:  Explicitly annotate that the client uses a browser over
+                  direct HTTPS. No VDI node is needed.
+
+  6.2  NETWORK INGRESS ANNOTATION
+       - Add a new notation or node above the client layer to represent the
+         network boundary (e.g., "Corporate Network / VPN Boundary [TBD]").
+       - This makes the diagram accurate once the network context is confirmed.
+
+  6.3  HTTPS LABELS ON EXPOSED SERVICES
+       - The existing diagram already shows:
+             HUIB --> Keycloak   [Step 1: User Authentication (HTTPS)]
+             HUIB --> Keystore   [Step 2: Retrieve Keys & Prefs (HTTPS)]
+             HUIB --> Preference [Step 2: Retrieve Keys & Prefs (HTTPS)]
+             HUIB --> Gatekeeper [Step 3: REST Requests (HTTPS)]
+       - These labels are correct and align with the direct HTTPS access model.
+       - No re-routing or VDI proxy node needs to be inserted.
+
+  6.4  NO VDI NODE REQUIRED
+       - Since VDI was not selected, no Citrix/VMware/AVD node should be
+         added to the diagram.
+       - If VDI is introduced in future, it would appear between the
+         "Corporate Network Boundary" and the "HUIB" node.
+
+  Recommended Diagram Change Summary:
+  ┌─────────────────────────────────────────┐
+  │  [Corporate Network / VPN — TBD]        │  ← NEW: network boundary annotation
+  │             │                           │
+  │      [Browser Endpoint]                 │  ← NEW: explicit endpoint node
+  │             │  HTTPS (TLS 1.3)          │
+  │      [HUIB / ExpertUI]                  │  ← UPDATE label
+  └─────────────────────────────────────────┘
+
+
+7. OPEN ITEMS (ACTION REQUIRED)
+---------------------------------
+The following items must be resolved before this document is finalized:
+
+  [ ] OI-1: NETWORK CONTEXT
+      Q: Will investigators access Hansken from the internal corporate/agency
+         network only, via VPN, or is the platform internet-facing?
+      Owner: [Network/Security Team]
+      Impact: Determines firewall rules, load balancer exposure, and whether
+              an SSL offloading proxy or WAF is required in front of Gatekeeper.
+
+  [ ] OI-2: MFA METHOD
+      Q: What MFA method will be enforced at Keycloak?
+         Options: TOTP app (Google Authenticator, Authy), hardware token
+         (YubiKey), or federation with existing agency SSO/IdP.
+      Owner: [Identity & Security Team]
+      Impact: Keycloak realm configuration and policy.
+
+  [ ] OI-3: LOAD BALANCER / INGRESS CONTROLLER
+      Q: What load balancer or Kubernetes Ingress Controller will front the
+         HTTPS services? (e.g., NGINX Ingress, HAProxy, F5, AWS ALB)
+      Owner: [Infrastructure Team]
+      Impact: TLS termination point, certificate management (cert-manager
+              vs. manual), and high-availability ingress design.
+
+  [ ] OI-4: EXTERNAL INVESTIGATOR ACCESS
+      Q: Are there investigators who will access from outside the primary
+         network (e.g., partner agencies, remote analysts)?
+      Owner: [Programme Manager / Security Officer]
+      Impact: May require VPN gateway or limited VDI introduction for
+              external users only.
+
+
+8. REFERENCES
+--------------
+  [1] Hansken Architecture Documentation — Gatekeeper
+      https://learning.hansken.org/docs/architecture.html#gatekeeper
+
+  [2] Hansken Architecture Documentation — Core Services
+      https://learning.hansken.org/docs/architecture.html#hansken-core
+
+  [3] Hansken Architecture Documentation — Keycloak / OpenLDAP
+      https://learning.hansken.org/docs/architecture.html#keycloak-openldap
+
+  [4] Existing Architecture Document (Internal)
+      hansken_data_flow_hierarchy.md — Hansken Data Flow & Architecture Hierarchy
+
+
+================================================================================
+END OF DOCUMENT — TASK 1: USER ACCESS WORKFLOW DEFINITION
+================================================================================

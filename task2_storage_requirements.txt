@@ -1,0 +1,426 @@
+================================================================================
+TASK 2 — APPLICATION STORAGE REQUIREMENTS
+Hansken Forensic Platform | Centralized Storage Initiative
+Document Version: 1.0 (DRAFT)
+Date: 2026-06-11
+Baseline Input Volume: 500 TB / year of raw forensic evidence
+Status: DRAFT — Archival tier and Elasticsearch retention period pending
+================================================================================
+
+1. PURPOSE
+----------
+This document verifies and documents the storage multiplication factors for
+each storage tier used by the Hansken forensic platform. It ensures that
+capacity planning reflects the correct number of data copies required for
+processing, fault tolerance, and archiving — not just the raw input volume.
+
+All calculations are grounded in official Apache Hadoop documentation,
+Elasticsearch sizing best practices, and the Hansken architecture.
+
+
+2. STORAGE TIERS IN SCOPE
+---------------------------
+Hansken uses four distinct storage tiers. Each has a different multiplication
+factor and purpose:
+
+  +------+-----------------------------------+----------------------------------+
+  | Tier | Technology                        | Data Stored                      |
+  +------+-----------------------------------+----------------------------------+
+  |  A   | Apache Hadoop (HDFS)              | Raw forensic evidence images     |
+  |  B   | S3 / Object Store                 | Derived trace data (OCR, parsed) |
+  |  C   | Elasticsearch                     | Trace search indices             |
+  |  D   | PostgreSQL                        | Project & preference metadata    |
+  +------+-----------------------------------+----------------------------------+
+
+These tiers correspond directly to the centralized storage architecture
+documented in hansken_data_flow_hierarchy.md.
+
+
+3. BASELINE INPUT ASSUMPTION
+------------------------------
+  Raw evidence input rate:  500 TB per year
+  Analysis period:          Annual sizing (year 1 as baseline)
+  Compression / encryption: Assumed applied before storage (Hansken stores
+                            evidence in compressed, encrypted form in HDFS).
+                            This document sizes AFTER compression; if
+                            pre-compression sizing is needed, apply your
+                            organization's evidence compression ratio first.
+
+
+================================================================================
+TIER A — APACHE HADOOP HDFS (Raw Forensic Evidence Images)
+================================================================================
+
+4A. WHAT HDFS STORES IN HANSKEN
+---------------------------------
+Per the official Hansken architecture documentation:
+  "Apache Hadoop stores your images that are used as input for the
+   extraction-process. For this we use the HDFS file system."
+  — Source: https://learning.hansken.org/docs/architecture.html#hadoop
+
+Raw evidence images (disk images, phone dumps, cloud archives) are uploaded
+into HDFS and serve as the immutable source-of-truth for all extraction.
+Extraction Workers read directly from HDFS. The data is never deleted after
+extraction — it must remain for re-extraction, auditing, and chain of custody.
+
+
+4B. REPLICATION FACTOR: WHY DEFAULT IS 3
+------------------------------------------
+The HDFS replication factor (RF) controls how many physical copies of each
+data block exist across the cluster's DataNodes.
+
+  Default Configuration Property:  dfs.replication = 3
+  Source (Apache Official):         https://hadoop.apache.org/docs/current/
+                                    hadoop-project-dist/hadoop-hdfs/hdfs-default.xml
+
+WHY RF=3 IS THE HDFS DEFAULT — TECHNICAL JUSTIFICATION:
+
+  The value of 3 is not arbitrary. It is the result of HDFS's rack-aware
+  replica placement policy, which requires a minimum of 3 replicas to
+  guarantee both node-level AND rack-level fault tolerance simultaneously:
+
+    Replica 1:  Written to the local DataNode (or a random node in the
+                writer's rack if writing from outside the cluster).
+    Replica 2:  Written to a DataNode on a DIFFERENT rack.
+    Replica 3:  Written to a DIFFERENT DataNode on the SAME rack as Replica 2.
+
+  This placement means:
+    - If 1 DataNode fails:  2 replicas remain (on 2 racks) → NO data loss.
+    - If 1 entire rack fails: 1 replica remains on the other rack → NO loss.
+    - During background re-replication (after a failure): 2 copies still
+      exist at all times, preventing a "double failure" data loss window.
+
+  Comparison of replication factors:
+  +-----------+--------------------+------------------+---------------------+
+  | RF Value  | Fault Tolerance    | Storage Overhead | Recommendation      |
+  +-----------+--------------------+------------------+---------------------+
+  | RF = 1    | None               |  1× raw size     | NOT suitable for    |
+  |           | (single copy)      |                  | forensic evidence   |
+  +-----------+--------------------+------------------+---------------------+
+  | RF = 2    | Single node        |  2× raw size     | Minimal; vulnerable |
+  |           | failure only       |                  | during re-repl.     |
+  +-----------+--------------------+------------------+---------------------+
+  | RF = 3    | Node + rack        |  3× raw size     | RECOMMENDED default |
+  | (default) | failure            |                  | for forensic use    |
+  +-----------+--------------------+------------------+---------------------+
+  | RF = 5    | Very high          |  5× raw size     | Used in high-sec    |
+  |           |                    |                  | financial/gov envs  |
+  +-----------+--------------------+------------------+---------------------+
+
+  For forensic evidence — which is legally critical, irreplaceable, and
+  subject to chain of custody requirements — RF=3 is the minimum recommended
+  setting. RF=2 is insufficient for a production forensic platform.
+
+  ALTERNATIVE: Erasure Coding (Hadoop 3+)
+    Hadoop 3 introduced Erasure Coding (EC) as an alternative to block
+    replication. EC (e.g., RS-6-3-1024k) achieves ~50% storage overhead
+    (vs. 200% for RF=3) with comparable fault tolerance for large files.
+    EC is most effective for cold/archival data. It introduces CPU overhead
+    during read and is NOT recommended as the default for hot active
+    extraction data without careful testing.
+    → Recommended: Use RF=3 for active evidence; evaluate EC for archival.
+
+
+4C. HDFS STORAGE CALCULATION
+-------------------------------
+  Input (raw evidence per year):      500 TB
+  Replication Factor:                 × 3
+  Processing headroom (temp files,
+    map/reduce shuffle, checksums):   + 25% of replicated volume
+                                      (industry standard for HDFS overhead)
+  ─────────────────────────────────────────────────────────────────────────
+  HDFS replicated volume:             500 TB × 3       = 1,500 TB
+  Processing overhead (25%):          1,500 TB × 0.25  =   375 TB
+  ─────────────────────────────────────────────────────────────────────────
+  TOTAL HDFS RAW CAPACITY REQUIRED:               ~1,875 TB (≈ 1.9 PB)
+  ─────────────────────────────────────────────────────────────────────────
+
+  Summary: Every 1 TB of raw evidence requires ~3.75 TB of HDFS raw disk
+  capacity (multiplication factor: ×3.75).
+
+
+================================================================================
+TIER B — S3 / OBJECT STORE (Derived Trace Data)
+================================================================================
+
+5A. WHAT S3 STORES IN HANSKEN
+-------------------------------
+Per the official Hansken architecture documentation:
+  "In Hansken it is used to store derived trace data, e.g. text extracted
+   from an image using OCR, or text extracted from HTML."
+  — Source: https://learning.hansken.org/docs/architecture.html#s3
+
+Derived data is written by Extraction Workers after processing raw images.
+Examples: OCR text, parsed HTML, file metadata, thumbnail previews,
+communication content (chat logs, email bodies), extracted binary artifacts.
+
+Derived data is typically SMALLER than the raw evidence. A representative
+industry ratio is 5–15% of the raw input size, depending on evidence type.
+For conservatism, this document uses 20% as the derived data estimate.
+
+
+5B. REPLICATION / REDUNDANCY FACTOR FOR S3
+--------------------------------------------
+Hansken's S3 layer may be:
+  a. A managed public cloud object store (AWS S3, Azure Blob, GCP GCS)
+     → Typically 3× internal replication is handled transparently by
+       the cloud provider. Standard-class storage = 11 nines durability.
+  b. A self-hosted S3-compatible solution (e.g., MinIO, Ceph RGW)
+     → MinIO in Erasure Code mode (default) uses a k+m parity model.
+       MinIO default: EC:4 — requires 8 drives minimum; up to 4 drive
+       failures tolerated. Effective storage overhead ≈ 2× raw size.
+
+  For planning purposes, this document uses a conservative factor of 2×
+  for self-hosted S3 (MinIO/Ceph), or 1× if using managed cloud storage
+  (where replication is included in the service SLA).
+
+  [PENDING — OI-1]: Confirm whether S3 is cloud-managed or self-hosted.
+  See Section 9 (Open Items).
+
+
+5C. S3 STORAGE CALCULATION
+-----------------------------
+  Derived data volume (20% of raw):  500 TB × 0.20    = 100 TB
+  Self-hosted S3 replication factor: × 2
+  Operational overhead (30%):        100 TB × 2 × 0.30 =  60 TB
+  ─────────────────────────────────────────────────────────────────────────
+  S3 base replicated volume:         100 TB × 2        = 200 TB
+  Operational overhead:                                 +  60 TB
+  ─────────────────────────────────────────────────────────────────────────
+  TOTAL S3 CAPACITY REQUIRED (self-hosted):         ~260 TB
+  TOTAL S3 CAPACITY REQUIRED (cloud-managed):       ~130 TB
+  ─────────────────────────────────────────────────────────────────────────
+
+  Summary: Derived data multiplication factor: ×2.6 (self-hosted) or
+  ×1.3 (cloud-managed) relative to derived data volume.
+  Relative to raw input: ×0.52 (self-hosted) or ×0.26 (cloud-managed).
+
+
+================================================================================
+TIER C — ELASTICSEARCH (Trace Search Indices)
+================================================================================
+
+6A. WHAT ELASTICSEARCH STORES IN HANSKEN
+------------------------------------------
+Per the official Hansken architecture documentation:
+  "The Trace-service is responsible for CRUD operations on traces generated
+   by Hansken, and stored in Elasticsearch."
+  — Source: https://learning.hansken.org/docs/architecture.html#trace-service
+
+Elasticsearch does NOT store the raw evidence or derived content files.
+It stores structured JSON trace documents: metadata fields, extracted
+attributes, communication records, file path hierarchies, timestamps, and
+search-indexed fields that allow investigators to search across all evidence.
+
+Elasticsearch index size relative to raw evidence depends heavily on:
+  - The richness of the metadata extracted per file/artifact.
+  - The number of traces generated (a single disk image may generate
+    millions of trace records).
+  - Elasticsearch field mappings (keyword vs. text, enabled fields).
+  - A representative estimate for forensic trace indices is 10–30% of
+    the raw input data size. This document uses 20% as the mid estimate.
+
+
+6B. ELASTICSEARCH REPLICATION FACTOR
+--------------------------------------
+Elasticsearch achieves redundancy via index shard replicas, not block-level
+replication. The standard configuration is:
+  - 1 primary shard replica per primary shard (replica_count = 1)
+  - This means every shard of data is stored twice (primary + 1 replica)
+  - Effective storage multiplication factor for shards: × 2
+
+Additional Lucene indexing overhead (inverted index, doc values, translog,
+segment files) adds approximately 15–30% overhead above the raw JSON size.
+For forensic trace data (text-heavy, many fields), 30% overhead is used.
+
+  Total Elasticsearch multiplication factor:
+    2 (primary + replica) × 1.30 (Lucene overhead) = ×2.60
+
+  Best practice: Add 20–30% headroom to avoid hitting Elasticsearch low
+  disk watermark (85% default), which blocks shard allocation and causes
+  cluster instability.
+
+
+6C. ELASTICSEARCH STORAGE CALCULATION
+----------------------------------------
+  Trace index data volume (20% of raw):    500 TB × 0.20    = 100 TB
+  Shard replication (×2):                  100 TB × 2       = 200 TB
+  Lucene overhead (×1.30):                 200 TB × 1.30    = 260 TB
+  Safety headroom (25%):                   260 TB × 0.25    =  65 TB
+  ─────────────────────────────────────────────────────────────────────────
+  TOTAL ELASTICSEARCH CAPACITY REQUIRED:              ~325 TB
+  ─────────────────────────────────────────────────────────────────────────
+  [PENDING — OI-2]: Confirm trace index retention period. If Elasticsearch
+  indices are retained for N years (not just active cases), this calculation
+  must be multiplied by N. See Section 9 (Open Items).
+
+  Shard sizing recommendation: Target 10–50 GB per primary shard.
+  Too small = oversharding (cluster state overhead). Too large = slow recovery.
+
+
+================================================================================
+TIER D — POSTGRESQL (Project & Preference Metadata)
+================================================================================
+
+7A. WHAT POSTGRESQL STORES IN HANSKEN
+---------------------------------------
+Per the official Hansken architecture documentation:
+  "The Project-service is responsible for CRUD operations on projects,
+   stored in Postgresql."
+  "Postgresql is used to store stateful data of the connected services.
+   So, for instance, it stores user preferences and project metadata."
+  — Source: https://learning.hansken.org/docs/architecture.html#project-service
+
+PostgreSQL stores lightweight relational records:
+  - Case/project definitions (name, investigators assigned, status)
+  - User preference settings
+  - Access control records (which investigators access which cases)
+  - Task scheduling state (Lobby scheduler metadata)
+
+PostgreSQL data volume is negligible compared to evidence storage.
+A generous estimate is 0.1–0.5 TB total for even very large deployments.
+
+
+7B. POSTGRESQL REPLICATION FACTOR
+------------------------------------
+PostgreSQL achieves redundancy via:
+  a. Streaming replication (primary + standby replica) — factor: × 2
+  b. Logical replication or Patroni HA — factor: × 2 or more
+  c. In a Kubernetes deployment: persistent volume with snapshot + backup.
+
+Standard HA PostgreSQL for Hansken = 1 primary + 1 synchronous standby
+  Replication factor: × 2
+  WAL archive / backup overhead: + 50% additional on top of live data
+
+  Total PostgreSQL multiplication factor: ≈ × 3 (including backups)
+
+
+7C. POSTGRESQL STORAGE CALCULATION
+-------------------------------------
+  PostgreSQL data volume estimate:         ~1 TB (very generous upper bound)
+  HA replication (×2):                     ~2 TB
+  WAL + backup overhead (×1.5):            ~3 TB
+  ─────────────────────────────────────────────────────────────────────────
+  TOTAL POSTGRESQL CAPACITY REQUIRED:              ~3 TB
+  ─────────────────────────────────────────────────────────────────────────
+  Note: PostgreSQL is negligible relative to the other tiers. High-
+  performance SSD storage is required (IOPS-sensitive), but the volume
+  is small. Include in HA storage planning, not raw capacity planning.
+
+
+================================================================================
+8. CONSOLIDATED STORAGE REQUIREMENTS SUMMARY
+================================================================================
+
+  Baseline: 500 TB/year raw forensic evidence input.
+
+  +------+------------------------+----------+-----------+-----------------------+
+  | Tier | Technology             | Raw Data | Multi-    | Required Capacity     |
+  |      |                        | Estimate | Factor    |                       |
+  +------+------------------------+----------+-----------+-----------------------+
+  |  A   | Hadoop HDFS            | 500 TB   | × 3.75    | ~1,875 TB (1.9 PB)   |
+  |  B   | S3 Object Store        | 100 TB   | × 2.60    |   ~260 TB             |
+  |      | (self-hosted, derived) | (est.)   |           | (~130 TB if cloud)    |
+  |  C   | Elasticsearch          | 100 TB   | × 3.25    |   ~325 TB             |
+  |      | (trace indices)        | (est.)   |           | (single-year, no ret.)|
+  |  D   | PostgreSQL             | ~1 TB    | × 3.00    |     ~3 TB             |
+  |      | (metadata)             | (est.)   |           |                       |
+  +------+------------------------+----------+-----------+-----------------------+
+  |      | TOTAL (self-hosted S3) |          |           | ~2,463 TB (≈ 2.5 PB) |
+  |      | TOTAL (cloud S3)       |          |           | ~2,333 TB (≈ 2.3 PB) |
+  +------+------------------------+----------+-----------+-----------------------+
+
+  Recommended rounding for procurement: Plan for 3.0 PB usable raw
+  capacity (accounting for hardware overhead, sparing, and year-2 growth).
+
+  Key Multiplication Factors by Tier:
+  ┌─────────────────────────────────────┬──────────────────────────────────┐
+  │ Tier A — HDFS (raw images)          │ ×3 replication + ×0.75 overhead  │
+  │                                     │ = ×3.75 total                    │
+  ├─────────────────────────────────────┼──────────────────────────────────┤
+  │ Tier B — S3 (derived data)          │ ×2 replication + ×0.30 overhead  │
+  │                                     │ = ×2.60 (self-hosted)            │
+  ├─────────────────────────────────────┼──────────────────────────────────┤
+  │ Tier C — Elasticsearch (indices)    │ ×2 sharding + ×1.30 Lucene +     │
+  │                                     │ ×0.25 headroom = ×3.25 total     │
+  ├─────────────────────────────────────┼──────────────────────────────────┤
+  │ Tier D — PostgreSQL (metadata)      │ ×2 HA replica + ×0.50 WAL/backup │
+  │                                     │ = ×3.00 total                    │
+  └─────────────────────────────────────┴──────────────────────────────────┘
+
+
+9. OPEN ITEMS (ACTION REQUIRED)
+---------------------------------
+  [ ] OI-1: S3 DEPLOYMENT MODEL
+      Q: Is S3 cloud-managed (AWS/Azure/GCP) or self-hosted (MinIO, Ceph)?
+      Impact: Determines the Tier B replication factor (×1 vs. ×2) and
+              total procurement volume.
+      Owner: [Infrastructure / Cloud Team]
+
+  [ ] OI-2: ELASTICSEARCH RETENTION PERIOD
+      Q: How long are trace indices retained in Elasticsearch?
+         Are closed case indices purged or kept indefinitely?
+      Impact: If indices are retained for 5 years, multiply Tier C by 5.
+              If indices are offloaded to ILM cold/frozen tier, a separate
+              cold-tier storage pool must be sized.
+      Owner: [Programme Manager / Legal Team]
+
+  [ ] OI-3: ARCHIVAL / COLD STORAGE TIER
+      Q: Is there a separate archival tier for completed cases
+         (e.g., tape, S3 Glacier, cold HDFS cluster)?
+      Impact: If evidence images are moved off hot HDFS after case closure,
+              the hot HDFS requirement may be reduced. An archival tier
+              would need to be separately sized with its own RF/policy.
+      Owner: [Programme Manager / Storage Team]
+
+  [ ] OI-4: DERIVED DATA RATIO VALIDATION
+      Q: Is the 20% derived-to-raw estimate validated against your
+         actual evidence types? (e.g., encrypted disk images produce
+         far less derived data than chat exports or email archives)
+      Impact: Tier B (S3) and Tier C (Elasticsearch) scale linearly with
+              this ratio. A PoC ingestion with representative data is
+              strongly recommended before finalizing procurement.
+      Owner: [Technical Team]
+
+  [ ] OI-5: ERASURE CODING FOR ARCHIVAL
+      Q: Should Erasure Coding (Hadoop 3+ RS-6-3 or RS-10-4) be
+         evaluated for the archival or cold HDFS tier to reduce the ×3
+         overhead to approximately ×1.5?
+      Impact: Significant cost saving (≈50% vs RF=3) for cold data, but
+              requires CPU overhead for decode and careful configuration.
+      Owner: [Infrastructure Team]
+
+
+10. REFERENCES
+---------------
+  [1] Apache Hadoop HDFS Default Configuration — dfs.replication property
+      https://hadoop.apache.org/docs/current/hadoop-project-dist/hadoop-hdfs/hdfs-default.xml
+
+  [2] Apache Hadoop HDFS Architecture — Rack-Aware Replica Placement
+      https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html#Replica_Placement:_The_First_Baby_Steps
+
+  [3] Hansken Architecture — Hadoop
+      https://learning.hansken.org/docs/architecture.html#hadoop
+
+  [4] Hansken Architecture — S3
+      https://learning.hansken.org/docs/architecture.html#s3
+
+  [5] Hansken Architecture — Trace-service / Elasticsearch
+      https://learning.hansken.org/docs/architecture.html#trace-service
+
+  [6] Hansken Architecture — Project-service / PostgreSQL
+      https://learning.hansken.org/docs/architecture.html#project-service
+
+  [7] Elasticsearch Official — Size your shards
+      https://www.elastic.co/guide/en/elasticsearch/reference/current/size-your-shards.html
+
+  [8] Apache Hadoop — Erasure Coding
+      https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HDFSErasureCoding.html
+
+  [9] Existing Architecture Document (Internal)
+      hansken_data_flow_hierarchy.md — Hansken Data Flow & Architecture Hierarchy
+
+
+================================================================================
+END OF DOCUMENT — TASK 2: APPLICATION STORAGE REQUIREMENTS
+================================================================================

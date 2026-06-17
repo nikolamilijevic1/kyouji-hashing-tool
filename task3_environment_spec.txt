@@ -1,0 +1,577 @@
+================================================================================
+TASK 3 — ENVIRONMENT SPECIFICATION SHEET
+Hansken Forensic Platform | Centralized Storage Initiative
+Document Version: 1.0 (DRAFT)
+Date: 2026-06-11
+Status: DRAFT — Infrastructure model and server counts pending final decision
+================================================================================
+
+1. PURPOSE
+----------
+This document specifies the number and types of deployment environments for
+the Hansken forensic platform, the architecture of each environment, and the
+per-environment hardware and configuration requirements. Where team decisions
+are still outstanding, options are presented with clear recommendations based
+on Hansken's official deployment model and industry best practices.
+
+
+================================================================================
+SECTION A — NUMBER OF ENVIRONMENTS
+================================================================================
+
+2. RECOMMENDED ENVIRONMENT COUNT: 3
+--------------------------------------
+Hansken is delivered as a packaged platform (Helm charts on Kubernetes), but
+it still requires a structured environment pipeline for the following reasons:
+
+  WHY DO YOU NEED MORE THAN JUST PRODUCTION?
+
+  a) EXTRACTION PLUGIN DEVELOPMENT & TESTING
+     Hansken supports custom extraction plugins, packaged as OCI (Docker)
+     container images. Plugins must be developed, validated, and tested before
+     being introduced to production evidence processing. A non-production
+     environment is required for this safely.
+     Source: https://learning.hansken.org/docs/plugins/
+
+  b) PLATFORM UPGRADES & PATCH VALIDATION
+     Hansken receives periodic updates from NFI. These must be tested against
+     your specific configuration (LDAP integration, storage backends, custom
+     plugins) before applying to production, or you risk breaking live
+     investigations.
+
+  c) INVESTIGATOR TRAINING
+     New investigators need a sandbox with realistic (but non-sensitive) data
+     to learn the platform without risk to live case data.
+
+  d) INTEGRATION TESTING
+     If Hansken is integrated with other upstream systems (evidence intake
+     systems, case management, chain of custody tools), those integrations
+     must be validated before production deployment.
+
+  RECOMMENDED 3-ENVIRONMENT PIPELINE:
+
+  +-------------+-------------------+------------------------------------------+
+  | Environment | Short Name        | Primary Purpose                          |
+  +-------------+-------------------+------------------------------------------+
+  | Production  | PROD              | Live forensic investigations by          |
+  |             |                   | authorized investigators. Full HA.       |
+  |             |                   | Real evidence data. Max security.        |
+  +-------------+-------------------+------------------------------------------+
+  | Staging /   | STAGE / UAT       | Pre-production validation: platform      |
+  | Acceptance  |                   | upgrades, plugin acceptance, integration |
+  |             |                   | testing. Mirrors PROD architecture.      |
+  |             |                   | Uses sanitized/synthetic data.           |
+  +-------------+-------------------+------------------------------------------+
+  | Development | DEV               | Plugin development, investigator         |
+  | / Test      |                   | training, configuration experiments.    |
+  |             |                   | Reduced resources. No HA required.       |
+  +-------------+-------------------+------------------------------------------+
+
+  NOTE: If budget constraints require reducing to 2 environments, the minimum
+  viable combination is PROD + STAGE/UAT. Development can be done on local
+  workstations using Docker/Minikube (Hansken supports local developer
+  environments via its SDK).
+
+  [PENDING — OI-1]: Confirm final number of environments with programme
+  management. See Section 10 (Open Items).
+
+
+================================================================================
+SECTION B — ARCHITECTURE OF EACH ENVIRONMENT
+================================================================================
+
+3. PRODUCTION (PROD) — HIGH AVAILABILITY (HA)
+-----------------------------------------------
+  Architecture Type:  FULL HA (Active-Passive with automatic failover)
+
+  WHY HA IS REQUIRED FOR PRODUCTION:
+  - Evidence processing is time-sensitive for active investigations.
+  - Forensic data at rest is irreplaceable; storage failures without redundancy
+    risk permanent data loss.
+  - Chain-of-custody integrity requires uninterrupted audit log collection.
+  - A production outage directly impacts law enforcement investigative capacity.
+
+  HA Requirements by Component:
+  +-----------------------+--------------------------------------------------+
+  | Component             | HA Design                                        |
+  +-----------------------+--------------------------------------------------+
+  | Kubernetes Control    | 3 control plane nodes (etcd quorum — requires    |
+  | Plane                 | odd number ≥ 3 for leader election)              |
+  +-----------------------+--------------------------------------------------+
+  | Kubernetes Workers    | Minimum 3 worker nodes (pods rescheduled on      |
+  |                       | node failure via Kubernetes node controller)     |
+  +-----------------------+--------------------------------------------------+
+  | Apache Hadoop (HDFS)  | RF=3 replication across ≥3 DataNodes on ≥2 racks|
+  |                       | NameNode in HA mode with standby NameNode        |
+  +-----------------------+--------------------------------------------------+
+  | Elasticsearch         | 3-node cluster (1 primary + 1 replica shard;     |
+  |                       | master-eligible quorum of 3 for split-brain      |
+  |                       | prevention)                                      |
+  +-----------------------+--------------------------------------------------+
+  | PostgreSQL            | 1 primary + 1 synchronous standby (Patroni       |
+  |                       | recommended for automatic failover)              |
+  +-----------------------+--------------------------------------------------+
+  | Keycloak              | 2+ instances in active-active cluster mode       |
+  |                       | sharing PostgreSQL backend                       |
+  +-----------------------+--------------------------------------------------+
+  | NATS JetStream        | NATS cluster with 3 nodes (Raft consensus)       |
+  +-----------------------+--------------------------------------------------+
+  | Apache Kafka          | 3-broker cluster + Zookeeper 3-node quorum       |
+  +-----------------------+--------------------------------------------------+
+  | Ingress / Load Bal.   | 2 load balancer nodes (active-passive)           |
+  +-----------------------+--------------------------------------------------+
+
+  RTO Target (Recovery Time Objective):   < 15 minutes
+  RPO Target (Recovery Point Objective):  < 1 hour (based on backup frequency)
+  [PENDING — OI-2]: Confirm RTO/RPO targets with management.
+
+4. STAGING / ACCEPTANCE (STAGE) — LIMITED HA
+----------------------------------------------
+  Architecture Type:  LIMITED HA (Resilient but not fully redundant)
+
+  Staging mirrors Production architecture but at reduced scale:
+  - Single control plane node (or 3-node if shared cluster with namespaces)
+  - 2–3 worker nodes (no full rack redundancy)
+  - Hadoop RF=2 (node failure tolerable; rack failure not)
+  - Elasticsearch: 2-node cluster (functional but not fully quorum-safe)
+  - PostgreSQL: primary only, with scheduled backup; no live standby
+  - NATS / Kafka: single broker (not clustered)
+
+  Purpose: Catch configuration and integration issues before PROD, not to
+  simulate production-level SLA. Downtime in this environment is acceptable.
+
+  Data policy: Sanitized or synthetically generated forensic data ONLY.
+  No real evidence data may reside in the Staging environment.
+
+5. DEVELOPMENT / TEST (DEV) — NO HA
+--------------------------------------
+  Architecture Type:  NO HA (Single-node or minimal cluster)
+
+  Dev is a minimal footprint environment:
+  - Single Kubernetes node or 2-node cluster (1 control + 1 worker)
+  - Hadoop: single DataNode (RF=1 or RF=2, data loss acceptable)
+  - Elasticsearch: single node, single shard, no replica
+  - PostgreSQL: single instance, no replication
+  - NATS: single node
+  - Kafka: optional (single broker if needed for plugin testing)
+
+  Alternative for individual developers:
+  - Local workstation using Minikube or Docker Desktop + kind cluster
+  - Hansken SDK supports local plugin development and unit testing without
+    a full cluster deployment.
+
+  Data policy: Synthetic / anonymized test data ONLY. No case data.
+
+
+================================================================================
+SECTION C — PER-ENVIRONMENT SPECIFICATIONS
+================================================================================
+
+6. WORKLOAD ASSUMPTIONS
+------------------------
+  PRODUCTION:
+  - Peak concurrent investigators:       [PENDING — OI-3] (estimate: 50–100)
+  - Evidence ingestion rate:             500 TB / year (Task 2 baseline)
+  - Peak extraction parallelism:         Up to 20 simultaneous extraction jobs
+  - Peak plugin pods (HPA burst):        Up to 40 plugin pod instances
+  - Search query rate:                   Moderate-high (investigators browsing)
+  - Operational hours:                   24/7 (law enforcement does not stop)
+
+  STAGING:
+  - Concurrent users:                    5–10 (testers, release validators)
+  - Evidence ingestion rate:             ~10% of PROD (synthetic data tests)
+  - Extraction jobs:                     2–3 simultaneous maximum
+  - Operational hours:                   Business hours + release windows
+
+  DEV:
+  - Concurrent users:                    2–5 (plugin developers, trainers)
+  - Evidence ingestion rate:             Minimal (test datasets, <1 TB)
+  - Extraction jobs:                     1 at a time
+  - Operational hours:                   Business hours only
+
+
+7. COMPUTE REQUIREMENTS (CPU / MEMORY) — PER ENVIRONMENT
+----------------------------------------------------------
+
+  NOTE ON GPU:
+  GPU is NOT required for standard Hansken deployment. Hansken's extraction
+  plugins are CPU-bound (text extraction, file parsing, metadata analysis).
+  GPU acceleration is only relevant if custom ML/AI-based plugins are
+  deployed (e.g., image recognition, deepfake detection). This should be
+  treated as a future option, not a baseline requirement.
+  [PENDING — OI-4]: Confirm whether any GPU-accelerated plugins are in scope.
+
+  ─────────────────────────────────────────────────────────────────────────────
+  PRODUCTION NODE LAYOUT
+  ─────────────────────────────────────────────────────────────────────────────
+
+  Node Role          | Count | CPU Cores | RAM    | Notes
+  ─────────────────────────────────────────────────────────────────────────────
+  Control Plane      |   3   |  8 cores  |  32 GB | etcd + API server quorum.
+  (K8s Master)       |       | (per node)|        | Dedicated nodes, no workload
+  ─────────────────────────────────────────────────────────────────────────────
+  App Workers        |   4   | 32 cores  | 128 GB | Hansken core services,
+  (General)          |       | (per node)|        | Keycloak, NATS, Kafka,
+                     |       |           |        | Gatekeeper, Lobby, etc.
+  ─────────────────────────────────────────────────────────────────────────────
+  Extraction Workers |   4   | 32 cores  | 256 GB | Memory-heavy extraction
+  (High-Memory)      |       | (per node)|        | plugins. 12 threads/plugin.
+                     |       |           |        | Extra RAM for retry pods.
+  ─────────────────────────────────────────────────────────────────────────────
+  HDFS DataNodes     |   3   | 16 cores  | 128 GB | Hadoop storage tier.
+                     |       | (per node)|        | Storage-heavy; see local
+                     |       |           |        | disk spec (Section 8).
+  ─────────────────────────────────────────────────────────────────────────────
+  Elasticsearch      |   3   | 16 cores  | 128 GB | Trace index nodes.
+  Nodes              |       | (per node)|        | RAM critical for JVM heap +
+                     |       |           |        | OS page cache. 50/50 split.
+  ─────────────────────────────────────────────────────────────────────────────
+  TOTAL PROD         |  17   |   ~340    |  ~2.2  |
+  NODES              | nodes |   cores   |   TB   |
+  ─────────────────────────────────────────────────────────────────────────────
+
+  PREFERRED CPU MODEL: AMD EPYC 7003/9004 series or Intel Xeon Scalable
+  (3rd/4th gen) — high core count, large cache, strong memory bandwidth.
+  These are well-suited for parallel forensic extraction workloads.
+  Avoid low-core-count server CPUs; prefer fewer, larger nodes.
+
+  ─────────────────────────────────────────────────────────────────────────────
+  STAGING NODE LAYOUT (scaled-down, ~30% of PROD)
+  ─────────────────────────────────────────────────────────────────────────────
+  Node Role          | Count | CPU Cores | RAM
+  ─────────────────────────────────────────────────────────────────────────────
+  Control Plane      |   1   |  8 cores  |  32 GB
+  App + Extraction   |   2   | 16 cores  |  64 GB
+  Workers (combined) |       |           |
+  HDFS DataNodes     |   2   |  8 cores  |  64 GB
+  Elasticsearch      |   2   |  8 cores  |  64 GB
+  ─────────────────────────────────────────────────────────────────────────────
+  TOTAL STAGE        |   7   |   ~72     |  ~416  |
+  ─────────────────────────────────────────────────────────────────────────────
+
+  ─────────────────────────────────────────────────────────────────────────────
+  DEV/TEST NODE LAYOUT (minimal viable)
+  ─────────────────────────────────────────────────────────────────────────────
+  Node Role          | Count | CPU Cores | RAM
+  ─────────────────────────────────────────────────────────────────────────────
+  All-in-one or 2    |   2   | 16 cores  |  64 GB   Combined control +
+  worker nodes       |       | (per node)|          worker + storage
+  ─────────────────────────────────────────────────────────────────────────────
+  TOTAL DEV          |   2   |   ~32     |  ~128  |
+  ─────────────────────────────────────────────────────────────────────────────
+
+
+8. LOCAL STORAGE PER SERVER
+-----------------------------
+  NOTE: HDFS and Elasticsearch use local attached storage on their dedicated
+  nodes. All other services (Hansken core, Keycloak, NATS, Kafka) use
+  Kubernetes Persistent Volumes backed by a shared storage array or SAN.
+
+  PRODUCTION:
+
+  Node Role          | Local Storage Type  | Local Storage Size  | Purpose
+  ─────────────────────────────────────────────────────────────────────────────
+  Control Plane      | SSD (OS + etcd)     |  500 GB             | OS, etcd DB
+  App Workers        | SSD (OS + ephemeral)|  500 GB             | OS, tmp
+  Extraction Workers | SSD (OS + scratch)  |  1 TB NVMe          | OS + large
+                     |                     |                     | extraction
+                     |                     |                     | scratch space
+  HDFS DataNodes     | HDD (data) +        | 12× 16 TB HDD       | Raw evidence
+                     | SSD (OS + journal)  | + 2× 1 TB SSD       | HDFS data
+                     |                     | = ~194 TB raw/node  | = 582 TB raw
+                     |                     |                     | total (HDFS)
+  Elasticsearch      | NVMe SSD (indices)  | 4× 7.68 TB NVMe     | Trace index
+  Nodes              | + SSD (OS)          | + 1× 1 TB SSD       | high IOPS
+                     |                     | = ~30 TB/node       |
+  ─────────────────────────────────────────────────────────────────────────────
+
+  SHARED PERSISTENT VOLUME STORAGE (for app workloads):
+  - Provisioned via SAN, NFS, or Ceph RBD
+  - Minimum 50 TB shared storage pool for app-layer PVs (PostgreSQL WAL,
+    Kafka log segments, NATS stream data, Keycloak DB)
+  - SSD/NVMe-backed for PostgreSQL and NATS (latency-sensitive)
+  - SAS/HDD acceptable for Kafka logs (throughput-oriented)
+
+  [PENDING — OI-5]: Confirm HDFS DataNode drive count and model with
+  storage procurement team. Calculation above based on 500 TB/year with RF=3.
+
+
+9. OPERATING SYSTEM REQUIREMENTS
+----------------------------------
+  Hansken runs on Kubernetes. The OS requirement is for the Kubernetes
+  node OS (the host OS on each server, not within containers).
+
+  RECOMMENDED OS: Ubuntu 22.04 LTS (Jammy Jellyfish) — Long Term Support
+                  OR Red Hat Enterprise Linux (RHEL) 9.x
+
+  Comparison:
+  +------------------+-----------------------------+---------------------------+
+  | Criterion        | Ubuntu 22.04 LTS            | RHEL 9.x                  |
+  +------------------+-----------------------------+---------------------------+
+  | Container Runtime| containerd (default)        | CRI-O (OpenShift) or      |
+  |                  | Full Docker support         | containerd                |
+  | Kubernetes       | Full compatibility          | Full compatibility         |
+  | Support          | (kubeadm, Rancher, etc.)    | (OpenShift preferred)     |
+  | Security         | AppArmor (default)          | SELinux enforcing (default)|
+  | Support Lifecycle| 5 years LTS (to 2027)       | 10 years (to 2032)        |
+  | Cost             | Free (Canonical support     | Paid subscription          |
+  |                  | subscription optional)      | required per socket        |
+  | Forensic/Gov use | Common in open deployments  | Standard for high-sec gov  |
+  |                  |                             | and law enforcement        |
+  +------------------+-----------------------------+---------------------------+
+
+  RECOMMENDATION:
+  - If your organization is a government / law enforcement agency with
+    existing RHEL licensing: use RHEL 9.x for all node types.
+  - If your organization is more flexible: Ubuntu 22.04 LTS is equally
+    capable and reduces licensing cost.
+  - For HDFS DataNodes and Elasticsearch nodes specifically: ensure
+    kernel supports XFS filesystem (both RHEL and Ubuntu do).
+
+  OS per Server Type Summary:
+  +-----------------------------+--------------------------------------------+
+  | Server Role                 | OS                                         |
+  +-----------------------------+--------------------------------------------+
+  | Kubernetes Control Plane    | Ubuntu 22.04 LTS  OR  RHEL 9.x            |
+  | Kubernetes App Workers      | Ubuntu 22.04 LTS  OR  RHEL 9.x            |
+  | Kubernetes Extraction Workers| Ubuntu 22.04 LTS  OR  RHEL 9.x           |
+  | HDFS DataNodes              | Ubuntu 22.04 LTS  OR  RHEL 9.x            |
+  | Elasticsearch Nodes         | Ubuntu 22.04 LTS  OR  RHEL 9.x            |
+  +-----------------------------+--------------------------------------------+
+  All nodes must run the SAME Linux distribution across an environment.
+  Do not mix RHEL and Ubuntu within the same cluster.
+
+  [PENDING — OI-6]: Confirm OS choice with IT Security / Procurement.
+
+
+9B. SERVER TYPE: VM vs. BARE METAL
+-------------------------------------
+  RECOMMENDATION: Virtual Machines (VMs) on existing hypervisor infrastructure
+  for App Workers and Control Plane nodes; consideration of Bare Metal for
+  HDFS DataNodes and Elasticsearch Nodes.
+
+  Rationale:
+  +------------------------------+-------------------------------------------+
+  | VM (all nodes)               | Bare Metal (storage/compute nodes)        |
+  +------------------------------+-------------------------------------------+
+  | + Faster provisioning        | + No hypervisor overhead on I/O           |
+  | + Easier snapshot/backup     | + Maximum storage throughput              |
+  | + Simpler HA failover        | + Better HDFS DataNode performance        |
+  | + Infrastructure re-use      |   (critical for 500 TB/yr ingestion)      |
+  | - Hypervisor overhead 4–18%  | - Higher management complexity            |
+  | - Hypervisor is a new SPOF   | - No live migration / snapshotting        |
+  +------------------------------+-------------------------------------------+
+
+  HYBRID APPROACH (Recommended):
+  - Kubernetes Control Plane, App Workers: VMs (flexibility + HA)
+  - HDFS DataNodes, Elasticsearch Nodes: Bare Metal (raw I/O performance)
+  - Extraction Workers: VMs with NVMe passthrough, or Bare Metal if budget
+    allows
+
+  [PENDING — OI-7]: Confirm VM vs. bare metal decision with infrastructure team.
+
+
+================================================================================
+SECTION D — CROSS-CUTTING REQUIREMENTS
+================================================================================
+
+10. BILINGUAL SUPPORT (English + French)
+------------------------------------------
+  Confirmed Requirement: English + French bilingual support.
+
+  HANSKEN UI (HUIB) BILINGUAL STATUS:
+  - The Hansken HUIB (ExpertUI) is developed by NFI (Dutch Forensic Institute).
+  - It natively supports multiple languages via its localization (i18n) system.
+  - [PENDING — OI-8]: Confirm with NFI / Hansken support whether the HUIB
+    includes a French (fr-CA or fr-FR) language pack out of the box, or
+    whether a custom translation must be contributed.
+
+  AREAS REQUIRING BILINGUAL COMPLIANCE:
+  +----------------------------------+---------------------------------------+
+  | Component                        | Bilingual Requirement                 |
+  +----------------------------------+---------------------------------------+
+  | HUIB Investigator Interface      | EN + FR display (UI strings, labels,  |
+  |                                  | error messages, notifications)        |
+  | Keycloak Login Page              | EN + FR (Keycloak natively supports   |
+  |                                  | locale-based login page themes)       |
+  | User Documentation & Training    | Must be provided in both languages    |
+  | System Notifications / Alerts    | EN + FR if sent to investigators      |
+  | Admin / Ops Tools (CLI, Helm)    | English only acceptable for internal  |
+  |                                  | ops team tools                        |
+  | Evidence / Case Data             | Language-neutral (binary forensic     |
+  |                                  | data; not subject to language rules)  |
+  +----------------------------------+---------------------------------------+
+
+  KEYCLOAK FRENCH SUPPORT:
+  Keycloak natively includes locale support. Adding a French login theme
+  requires creating or importing a Keycloak theme JAR with fr translations.
+  Keycloak community provides French translations by default.
+
+  ACTION REQUIRED:
+  [ ] Confirm with NFI whether HUIB includes fr-CA or fr-FR locale out-of-box
+  [ ] Confirm whether Canadian French (fr-CA) or European French (fr-FR) is
+      required
+  [ ] Validate Keycloak French login theme is configured in Helm values
+
+
+11. BACKUP AND DISASTER RECOVERY (DR) PLAN
+--------------------------------------------
+  PRODUCTION BACKUP STRATEGY:
+
+  +---------------------+------------------+----------------------------------+
+  | Component           | Backup Method    | Frequency / Retention            |
+  +---------------------+------------------+----------------------------------+
+  | Hadoop HDFS         | HDFS Snapshots   | Daily snapshot; 30-day retention |
+  | (raw evidence)      | + off-cluster    | Weekly full copy to DR site or   |
+  |                     | replication      | cold storage. Evidence is        |
+  |                     |                  | immutable; primary copy must be  |
+  |                     |                  | protected at all times.          |
+  +---------------------+------------------+----------------------------------+
+  | S3 Object Store     | S3 Versioning    | S3 versioning enabled.           |
+  | (derived data)      | + cross-bucket   | Cross-bucket replication to DR   |
+  |                     | replication      | site. Derived data is            |
+  |                     |                  | re-generatable from HDFS if lost |
+  |                     |                  | (lower priority than HDFS).      |
+  +---------------------+------------------+----------------------------------+
+  | Elasticsearch       | Snapshots to S3  | Daily ES snapshot to S3/object   |
+  | (trace indices)     | repository       | store. 14-day retention.         |
+  |                     |                  | Indices can be re-indexed from   |
+  |                     |                  | HDFS/S3 if needed (slow).        |
+  +---------------------+------------------+----------------------------------+
+  | PostgreSQL          | pg_dump /        | Continuous WAL archiving (PITR). |
+  | (metadata)          | pg_basebackup    | Daily base backup. 30-day WAL    |
+  |                     | + WAL archiving  | archive retention.               |
+  +---------------------+------------------+----------------------------------+
+  | Keycloak            | PostgreSQL backup | Covered by PostgreSQL backup.    |
+  | (auth state)        | + realm export   | Additionally, weekly Keycloak    |
+  |                     |                  | realm export (JSON) stored in    |
+  |                     |                  | version control.                 |
+  +---------------------+------------------+----------------------------------+
+  | Kubernetes State    | etcd snapshot    | Automated etcd snapshot every    |
+  | (cluster config)    | (Velero)         | 6 hours via Velero. Backed up    |
+  |                     |                  | to S3/object store.              |
+  +---------------------+------------------+----------------------------------+
+  | Helm Values /       | Git repository   | All Helm values files, custom    |
+  | Config              |                  | configs, and manifests in Git.   |
+  |                     |                  | Git repo itself must be backed   |
+  |                     |                  | up externally.                   |
+  +---------------------+------------------+----------------------------------+
+
+  DISASTER RECOVERY TIERS:
+  - Tier 1 (RTO < 15 min):  Kubernetes pod restarts, HDFS NameNode failover,
+                              PostgreSQL Patroni automatic failover.
+  - Tier 2 (RTO < 4 hours): Full node failure recovery. Node replacement +
+                              Kubernetes pod rescheduling + HDFS re-replication.
+  - Tier 3 (RTO < 24 hours): Full cluster loss. Recovery from backup
+                              (PostgreSQL PITR, ES snapshot, HDFS snapshot).
+
+  DR SITE:
+  [PENDING — OI-9]: Determine whether a geographically separate DR site is
+  required or whether on-site backup is sufficient. Law enforcement use case
+  may require off-site encrypted backup per organizational policy.
+
+
+12. AUTHENTICATION
+-------------------
+  Hansken uses a layered authentication and authorization model built into
+  its architecture. No additional external SSO gateway is required to start.
+
+  AUTHENTICATION STACK:
+
+  +---------------------+----------------------------------------------------+
+  | Layer               | Technology & Configuration                         |
+  +---------------------+----------------------------------------------------+
+  | Identity Provider   | Keycloak (OIDC / OAuth2)                           |
+  | (Primary)           | Bundled with Hansken Helm chart by default.        |
+  |                     | Issues JWT access tokens to authenticated users.   |
+  +---------------------+----------------------------------------------------+
+  | User Directory      | OpenLDAP (bundled default)                         |
+  |                     | OR Active Directory (recommended for enterprise)   |
+  |                     | Keycloak federates to LDAP/AD via User Federation. |
+  |                     | Investigators do NOT have local Hansken accounts;  |
+  |                     | all identity management is centralized.            |
+  +---------------------+----------------------------------------------------+
+  | Multi-Factor Auth   | Enforced at Keycloak authentication flow.          |
+  | (MFA)               | Options:                                           |
+  |                     |   - TOTP (RFC 6238): Google Authenticator, Authy   |
+  |                     |   - WebAuthn / FIDO2: hardware security keys       |
+  |                     |   - SMS OTP: supported but NOT recommended for     |
+  |                     |     law enforcement (SIM-swap risk)                |
+  |                     | [PENDING — OI-10]: Confirm MFA method required.    |
+  +---------------------+----------------------------------------------------+
+  | Authorization       | Role-Based Access Control (RBAC) within Hansken.  |
+  |                     | Roles assigned in Keycloak and propagated via JWT: |
+  |                     |   - INVESTIGATOR: read/search access to cases     |
+  |                     |   - CASE_MANAGER: create/manage cases             |
+  |                     |   - ADMIN: full platform administration            |
+  |                     | Case-level access control: investigators only see  |
+  |                     | cases they are explicitly assigned to.             |
+  +---------------------+----------------------------------------------------+
+  | Transport Security  | TLS 1.2 minimum (TLS 1.3 preferred) on all HTTPS  |
+  | (In-Transit)        | endpoints. Mutual TLS (mTLS) for internal gRPC    |
+  |                     | service-to-service communication via Istio/Envoy  |
+  |                     | service mesh (Hansken uses this internally).       |
+  +---------------------+----------------------------------------------------+
+  | Encryption at Rest  | Hansken encrypts evidence images via the Keystore.|
+  |                     | Encryption keys are per-case. Node-level disk      |
+  |                     | encryption (LUKS / BitLocker equivalent) should    |
+  |                     | be applied at the OS level by the infrastructure  |
+  |                     | team for full defense-in-depth.                    |
+  +---------------------+----------------------------------------------------+
+
+  ACTIVE DIRECTORY INTEGRATION NOTE:
+  If your organization uses Microsoft Active Directory, Keycloak can federate
+  directly to AD via LDAP. This means investigators log in with their existing
+  Windows/agency credentials. This is the recommended approach for a
+  centralized storage initiative with existing AD infrastructure.
+
+
+================================================================================
+13. OPEN ITEMS (ACTION REQUIRED)
+================================================================================
+  [ ] OI-1:  Confirm final number of environments (3 recommended: PROD/STAGE/DEV)
+  [ ] OI-2:  Confirm RTO and RPO targets for PROD with programme management
+  [ ] OI-3:  Confirm peak concurrent investigator count for PROD sizing
+  [ ] OI-4:  Confirm whether GPU-accelerated extraction plugins are in scope
+  [ ] OI-5:  Confirm HDFS DataNode drive count and model with storage team
+  [ ] OI-6:  Confirm OS choice: Ubuntu 22.04 LTS or RHEL 9.x
+  [ ] OI-7:  Confirm VM vs. bare metal decision with infrastructure team
+  [ ] OI-8:  Confirm Hansken HUIB French locale availability with NFI support
+  [ ] OI-9:  Confirm whether off-site / geographically separate DR site required
+  [ ] OI-10: Confirm MFA method: TOTP, WebAuthn/FIDO2, or organizational SSO
+
+
+================================================================================
+14. REFERENCES
+================================================================================
+  [1] Hansken Architecture Documentation
+      https://learning.hansken.org/docs/architecture.html
+
+  [2] Hansken Plugin Development Documentation
+      https://learning.hansken.org/docs/plugins/
+
+  [3] Kubernetes High Availability — Control Plane Requirements
+      https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/high-availability/
+
+  [4] Keycloak Multi-Site Deployment
+      https://www.keycloak.org/docs/latest/server_installation/
+
+  [5] Apache Hadoop NameNode HA
+      https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HDFSHighAvailabilityWithQJM.html
+
+  [6] Elasticsearch High Availability / Cluster Design
+      https://www.elastic.co/guide/en/elasticsearch/reference/current/high-availability-cluster-design.html
+
+  [7] Velero — Kubernetes Backup and DR
+      https://velero.io/docs/
+
+  [8] Existing Architecture Document (Internal)
+      hansken_data_flow_hierarchy.md — Hansken Data Flow & Architecture Hierarchy
+
+  [9] Task 2 — Storage Requirements (Internal)
+      task2_storage_requirements.txt
+
+
+================================================================================
+END OF DOCUMENT — TASK 3: ENVIRONMENT SPECIFICATION SHEET
+================================================================================

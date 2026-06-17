@@ -1,0 +1,575 @@
+================================================================================
+TASK 4 — AUDIT TRAIL, CHAIN OF CUSTODY: SOLUTION & OPTIONS DRAFT
+Hansken Forensic Platform | Centralized Storage Initiative
+Document Version: 1.0 (DRAFT)
+Date: 2026-06-11
+Status: DRAFT — Solution selection pending programme review
+================================================================================
+
+1. PURPOSE
+----------
+This document defines the audit trail and chain of custody (CoC) requirements
+for the Hansken forensic platform deployment and presents a structured set of
+solution options. It covers what Hansken provides natively, where gaps exist,
+and the technology options available to close them.
+
+Chain of custody is not optional for a forensic platform — it is the legal
+foundation that determines whether evidence gathered and analyzed in Hansken
+can be admitted in court. Every access, every action, every transfer must be
+traceable, tamper-evident, and attributable to a specific authenticated user.
+
+
+================================================================================
+2. DEFINITIONS
+================================================================================
+
+  Audit Trail:
+    A chronological, tamper-evident record of every action taken within the
+    platform — who did what, to which evidence, at what time, and from where.
+    Covers user logins, case access, evidence viewing, search queries,
+    extraction triggers, and administrative changes.
+
+  Chain of Custody (CoC):
+    The documented and unbroken sequence of possession and control of evidence
+    from the moment it is acquired (seized) to its presentation in court.
+    For digital forensics, this means being able to prove:
+      1. The original evidence was not altered during or after acquisition.
+      2. Only authorized persons accessed the evidence.
+      3. Every step of processing (extraction, analysis, export) is recorded.
+      4. The integrity (hash) of evidence files has been continuously verified.
+
+  Immutability:
+    The property that an audit record or evidence file cannot be altered,
+    deleted, or overwritten after being written — even by system administrators.
+    Immutability is the technical guarantee that makes audit trails legally
+    defensible.
+
+
+================================================================================
+3. HANSKEN NATIVE AUDIT & CHAIN OF CUSTODY CAPABILITIES
+================================================================================
+
+3.1  BUILT-IN AUDIT LOGGING
+-----------------------------
+  Hansken provides audit logging as a core forensic feature. Per the official
+  Hansken documentation and NFI forensic principles:
+
+  a) USER ACTION LOGGING
+     Every request made by a user through the Hansken HUIB or API is logged,
+     including:
+       - Timestamp (date + time, UTC)
+       - Authenticated user identity (from Keycloak JWT)
+       - Type of action (case open, search query, trace view, extraction start,
+         data export, etc.)
+       - Target resource (case ID, trace ID, evidence item ID)
+       - Source IP address
+
+  b) EVIDENCE INTEGRITY — HASH VERIFICATION
+     When evidence images (forensic disk images, phone dumps) are ingested
+     into HDFS, Hansken computes and stores cryptographic hashes (checksums)
+     of the evidence files. These hashes:
+       - Are reproducible at any time to verify the evidence has not changed.
+       - Are stored as metadata associated with the evidence item in Hansken.
+       - Are the digital equivalent of a physical evidence seal — if the
+         evidence hash today differs from the ingestion hash, the evidence
+         has been altered and must be considered compromised.
+
+  c) TRANSPARENT PROCESSING (NON-ALTERATION PRINCIPLE)
+     Hansken's extraction pipeline is designed so that extraction workers
+     read evidence from HDFS but never write back to it. Derived trace data
+     is written only to S3. The original evidence image in HDFS remains
+     immutable and unmodified throughout the investigation lifecycle.
+     This is a core architectural guarantee, not just a policy.
+
+  d) EXTERNAL AUDIT LOG FORWARDING
+     Hansken supports forwarding audit log data to external systems, such as
+     a Security Information and Event Management (SIEM) platform. This allows
+     the audit trail to be:
+       - Stored outside the Hansken environment (physically separate)
+       - Protected by the SIEM's own access controls and retention policies
+       - Correlated with OS-level, network-level, and other platform logs
+     Source: https://learning.hansken.org/docs/ (Forensic Measures section)
+
+  e) CASE-LEVEL ACCESS CONTROL LOGGING
+     Hansken enforces investigator-to-case assignment. The audit log captures
+     all RBAC assignments (who was granted access to which case, when, and by
+     whom) as part of the investigation record.
+
+  f) JUDICIAL VALIDATION
+     Hansken has been used in thousands of criminal investigations and has
+     withstood judicial review in Dutch courts. Its forensic measures have
+     been validated as meeting legal standards for evidence admissibility.
+     Source: https://hansken.nl (NFI Hansken judicial use cases)
+
+3.2  WHAT HANSKEN DOES NOT PROVIDE NATIVELY
+---------------------------------------------
+  Despite strong built-in capabilities, Hansken does NOT natively provide:
+
+  [ ] A dedicated immutable log storage backend (WORM storage) within its
+      own data stores. Audit logs in Elasticsearch or internal storage are
+      mutable by a privileged administrator.
+
+  [ ] Hash chaining / cryptographic linking of sequential audit events
+      (i.e., each log entry does not cryptographically reference the prior
+      one to make tampering mathematically detectable).
+
+  [ ] A physical chain of custody form system (tracking physical handoff of
+      evidence from the scene to the digital platform — this is external
+      to Hansken by design).
+
+  [ ] Court-ready automated CoC report generation (a human-readable PDF
+      report summarizing the entire custody history of a piece of evidence).
+
+  [ ] Integration with dedicated evidence management systems (DEMS) such as
+      Axon Evidence, NICE Investigate, or VIDIZMO — which track physical
+      evidence alongside digital evidence.
+
+  These gaps are addressed by the solution options in Section 4.
+
+
+================================================================================
+4. SOLUTION OPTIONS
+================================================================================
+
+Four options are presented below, ranging from minimum viable to gold-standard.
+Each option builds on the one before it.
+
+────────────────────────────────────────────────────────────────────────────────
+OPTION 1 — NATIVE HANSKEN AUDIT + CENTRALIZED SIEM (BASELINE)
+────────────────────────────────────────────────────────────────────────────────
+  Description:
+    Use Hansken's built-in audit logging as the primary audit trail.
+    Forward all logs to a centralized SIEM platform for long-term retention,
+    alerting, and reporting. No additional tooling required beyond SIEM.
+
+  Components:
+    - Hansken native audit logging (built-in)
+    - Log forwarding to SIEM via Fluentd, Logstash, or OpenTelemetry Collector
+    - SIEM Platform (one of the following):
+        a. Elasticsearch / ELK Stack (Elastic Security)
+           — Already used by Hansken for trace storage; can serve dual-purpose
+             with a separate index for audit logs.
+        b. Splunk
+           — Market leader; strong law enforcement adoption; higher cost.
+        c. Graylog
+           — Cost-effective; strong log routing; open-source core available.
+        d. Microsoft Sentinel
+           — Best if Azure / Microsoft infrastructure is the organisational stack.
+
+  Chain of Custody Coverage:
+    - Evidence hash verification: ✅ (Hansken native)
+    - User action logging: ✅ (Hansken native)
+    - External log storage: ✅ (SIEM)
+    - WORM/immutable log storage: ⚠️ PARTIAL (depends on SIEM configuration)
+    - Hash-chained audit entries: ❌ Not included
+    - Physical CoC form: ❌ Not included
+    - Court-ready report: ❌ Manual; not automated
+
+  Effort:       LOW
+  Cost:         LOW–MEDIUM (SIEM licensing)
+  Compliance:   ADEQUATE for most law enforcement use cases
+  Recommended:  YES — as the minimum viable baseline for all environments
+
+────────────────────────────────────────────────────────────────────────────────
+OPTION 2 — OPTION 1 + IMMUTABLE (WORM) LOG STORAGE
+────────────────────────────────────────────────────────────────────────────────
+  Description:
+    Extend Option 1 by routing audit logs to a WORM (Write Once, Read Many)
+    storage target in addition to the SIEM. This ensures that even if the SIEM
+    is compromised or an administrator attempts to delete logs, a read-only
+    copy exists that cannot be altered within the retention period.
+
+  WORM Storage Options:
+    a. Object Store with Object Lock (S3-compatible)
+       - AWS S3 Object Lock, Azure Immutable Blob Storage, or MinIO Object Lock
+       - Set Compliance Mode (not Governance Mode) for true immutability
+       - Set a retention period matching your legal/policy requirement (e.g.,
+         7 years for law enforcement records)
+       - Logs are forwarded directly from the SIEM/log pipeline into a locked
+         S3 bucket. Once written, no one — including root — can delete them
+         before the retention period expires.
+    b. WORM-Enabled NAS / SAN
+       - Enterprise NAS appliances (NetApp SnapLock, Dell EMC DataDomain
+         Retention Lock) provide hardware-level WORM enforcement.
+       - Useful if on-premises storage is mandated.
+
+  Additional Components vs. Option 1:
+    - S3 Object Lock bucket (or WORM NAS) as secondary log destination
+    - Dual-write log pipeline (SIEM + WORM target)
+
+  Chain of Custody Coverage:
+    - Evidence hash verification: ✅
+    - User action logging: ✅
+    - External log storage: ✅
+    - WORM/immutable log storage: ✅
+    - Hash-chained audit entries: ❌ Not included
+    - Physical CoC form: ❌ Not included
+    - Court-ready report: ❌ Manual
+
+  Effort:       LOW–MEDIUM
+  Cost:         MEDIUM (WORM storage + Object Lock licensing or NAS)
+  Compliance:   STRONG — meets requirements for most regulatory frameworks
+                (ISO 27001, SOC 2, law enforcement records retention)
+  Recommended:  YES — PRODUCTION environment minimum standard
+
+────────────────────────────────────────────────────────────────────────────────
+OPTION 3 — OPTION 2 + HASH-CHAINED AUDIT LOG (ADVANCED INTEGRITY)
+────────────────────────────────────────────────────────────────────────────────
+  Description:
+    Extend Option 2 by implementing cryptographic hash chaining of the audit
+    log entries. Each new log entry includes the cryptographic hash (SHA-256)
+    of the previous entry, forming a tamper-evident chain. Any deletion or
+    modification of a past entry causes all subsequent hashes to become invalid,
+    making tampering mathematically detectable.
+
+  Implementation Approaches:
+    a. Custom Log Processor (e.g., Logstash filter)
+       - A Logstash (or Fluentd) filter computes SHA-256 of each outgoing log
+         record, appends the previous entry's hash, and signs the result.
+       - Relatively simple to implement; requires custom development.
+       - The signed log stream is then written to WORM storage.
+    b. Purpose-built Audit Log Platform
+       - Tools like Immudb (open source, immutable database) or Chronicle
+         Audit Vault provide hash-chained, append-only audit log storage
+         out of the box.
+       - Immudb: lightweight, open-source, designed for forensic audit logs;
+         provides a tamper-evident ledger with built-in verification API.
+         URL: https://immudb.io/
+       - Google Chronicle: enterprise-scale security telemetry platform with
+         immutable log storage; higher cost.
+
+  Additional Components vs. Option 2:
+    - Hash-chaining log processor (Logstash filter, custom service, or Immudb)
+    - Verification tooling to audit the chain integrity on-demand
+
+  Chain of Custody Coverage:
+    - Evidence hash verification: ✅
+    - User action logging: ✅
+    - External log storage: ✅
+    - WORM/immutable log storage: ✅
+    - Hash-chained audit entries: ✅
+    - Physical CoC form: ❌ Not included
+    - Court-ready report: ❌ Manual (but chain is mathematically provable)
+
+  Effort:       MEDIUM
+  Cost:         MEDIUM–HIGH (engineering effort or Immudb/Chronicle licensing)
+  Compliance:   HIGHEST TECHNICAL STANDARD for digital audit integrity
+  Recommended:  For high-security or legally contested environments
+
+────────────────────────────────────────────────────────────────────────────────
+OPTION 4 — FULL SOLUTION: OPTIONS 1–3 + DEMS + COURT-READY REPORTING
+────────────────────────────────────────────────────────────────────────────────
+  Description:
+    The complete chain of custody solution, integrating Hansken's digital
+    audit trail with a Digital Evidence Management System (DEMS) that handles
+    physical evidence tracking, evidence transfers, and automated court-ready
+    CoC report generation.
+
+  What a DEMS adds:
+    - Physical chain of custody tracking (who received the physical device,
+      who transported it, who logged it in, who extracted it)
+    - Digital + physical custody unified in one system
+    - Automated court-ready reports (formatted for submission to court, showing
+      full custody history with timestamps, hashes, and signatures)
+    - Evidence transfer workflow (approval + logging of who is authorizing
+      a transfer of evidence from custody to analysis)
+    - Automated hash re-verification on every transfer event
+
+  DEMS Solution Options:
+    a. Axon Evidence (formerly Evidence.com)
+       - Market leader for law enforcement DEMS
+       - Manages video, audio, documents, and digital evidence items
+       - Built-in CoC reporting, audit log, chain-of-custody forms
+       - Cloud-based (SaaS) — data residency must be confirmed for Canadian law
+       - Integration with Hansken: custom API integration via Hansken REST API
+
+    b. NICE Investigate
+       - Strong law enforcement market presence
+       - Multi-agency evidence sharing capabilities
+       - Integrates with CCTV, bodycam, and digital forensic outputs
+
+    c. VIDIZMO DEMS
+       - Strong bilingual and multi-language support (aligns with EN+FR req.)
+       - On-premises deployable (important for sovereignty / data residency)
+       - Robust audit trail and CoC tracking
+
+    d. Build custom CoC module (Hansken API + internal ITSM/case system)
+       - Use Hansken's REST API to extract audit events and evidence metadata
+       - Generate CoC reports using an internal reporting tool (e.g., Power BI,
+         custom PDF generation service)
+       - Lowest license cost; highest development effort
+       - Gives maximum control over data residency and bilingual compliance
+
+  Chain of Custody Coverage:
+    - Evidence hash verification: ✅
+    - User action logging: ✅
+    - External log storage: ✅
+    - WORM/immutable log storage: ✅
+    - Hash-chained audit entries: ✅ (if Option 3 included)
+    - Physical CoC form: ✅
+    - Court-ready report: ✅ (automated)
+    - Multi-language (EN+FR) reports: ✅ (VIDIZMO or custom build)
+
+  Effort:       HIGH
+  Cost:         HIGH (DEMS licensing or significant custom development)
+  Compliance:   GOLD STANDARD — full judicial admissibility package
+  Recommended:  For agencies with high volume of court submissions or
+                multi-agency evidence sharing requirements
+
+
+================================================================================
+5. OPTION COMPARISON MATRIX
+================================================================================
+
+  +-------------------+--------+--------+--------+--------+
+  | Capability        | Opt. 1 | Opt. 2 | Opt. 3 | Opt. 4 |
+  +-------------------+--------+--------+--------+--------+
+  | Evidence hash     |   ✅   |   ✅   |   ✅   |   ✅   |
+  | verification      |        |        |        |        |
+  +-------------------+--------+--------+--------+--------+
+  | User action logs  |   ✅   |   ✅   |   ✅   |   ✅   |
+  +-------------------+--------+--------+--------+--------+
+  | External SIEM     |   ✅   |   ✅   |   ✅   |   ✅   |
+  +-------------------+--------+--------+--------+--------+
+  | WORM immutable    |   ⚠️   |   ✅   |   ✅   |   ✅   |
+  | log storage       |        |        |        |        |
+  +-------------------+--------+--------+--------+--------+
+  | Hash-chained      |   ❌   |   ❌   |   ✅   |   ✅   |
+  | audit entries     |        |        |        |        |
+  +-------------------+--------+--------+--------+--------+
+  | Physical CoC      |   ❌   |   ❌   |   ❌   |   ✅   |
+  | form / workflow   |        |        |        |        |
+  +-------------------+--------+--------+--------+--------+
+  | Court-ready       |   ❌   |   ❌   |   ❌   |   ✅   |
+  | automated report  |        |        |        |        |
+  +-------------------+--------+--------+--------+--------+
+  | EN + FR support   |   ⚠️   |   ⚠️   |   ⚠️   |  ✅*  |
+  |                   | depends| depends| depends|(VIDIZMO|
+  |                   | on SIEM| on SIEM| on tool| or cust|
+  +-------------------+--------+--------+--------+--------+
+  | Relative Cost     |   $    |   $$   |  $$$   |  $$$$  |
+  +-------------------+--------+--------+--------+--------+
+  | Implementation    |  Low   |  Low   | Medium |  High  |
+  | Effort            |        |        |        |        |
+  +-------------------+--------+--------+--------+--------+
+
+  * Option 4 bilingual support depends on DEMS selection (VIDIZMO or custom).
+
+
+================================================================================
+6. RECOMMENDED APPROACH
+================================================================================
+
+  PHASE 1 (Launch — Day 1):
+    Implement OPTION 2 — Native Hansken audit + SIEM + WORM log storage.
+    This provides a legally defensible baseline immediately, without large
+    upfront integration effort.
+
+    Minimum configuration:
+    - Enable Hansken external audit log forwarding
+    - Deploy SIEM (Graylog or Elasticsearch recommended — already in stack)
+    - Configure S3 Object Lock bucket (Compliance Mode) as WORM log archive
+    - Retain logs for minimum 7 years (confirm with legal team)
+    - Alert on: failed login, unauthorized case access attempt, evidence
+      hash mismatch, bulk data export events
+
+  PHASE 2 (Post-Launch — 3–6 months):
+    Evaluate and implement OPTION 3 — Hash-chained audit entries.
+    Introduce Immudb or custom hash-chaining processor to make the audit log
+    mathematically tamper-evident. This significantly strengthens the
+    legal admissibility position at relatively low additional cost.
+
+  PHASE 3 (12–18 months, based on court reporting volume):
+    Evaluate OPTION 4 — DEMS integration.
+    If the volume of court submissions is significant, or if multi-agency
+    evidence sharing is required, evaluate a DEMS platform.
+    VIDIZMO DEMS is the recommended starting point due to:
+    - On-premises deployment support (data residency)
+    - Bilingual (EN+FR) interface and report generation
+    - REST API for integration with Hansken
+
+  PHYSICAL CHAIN OF CUSTODY (Immediate):
+    Regardless of which software option is selected, physical CoC procedures
+    must be implemented NOW as a process/policy requirement:
+    - Evidence Intake Form: logged at the point of physical receipt
+    - Evidence Bag Logging: device sealed, hash computed on acquisition
+    - Hansken Ingestion Record: evidence item registered in Hansken with
+      ingestion timestamp, operator ID, and initial hash
+    - Transfer Log: any handoff of the physical device to another custodian
+      must be signed and timestamped
+    These can be implemented as paper forms or a simple case management
+    system entry immediately, independent of any software choice.
+
+
+================================================================================
+7. KEY AUDIT EVENTS TO CAPTURE (LOG TAXONOMY)
+================================================================================
+
+  The following events MUST be captured in the audit trail at minimum:
+
+  AUTHENTICATION EVENTS:
+    - User login (success / failure, source IP)
+    - User logout
+    - MFA challenge result (success / failure)
+    - Session expiry / forced termination
+    - Password reset / account unlock (admin action)
+
+  CASE / EVIDENCE ACCESS EVENTS:
+    - Case created / modified / closed / deleted
+    - Investigator assigned to / removed from case
+    - Evidence item ingested (with ingestion hash)
+    - Evidence item viewed / downloaded
+    - Evidence hash re-verification result (pass / FAIL — FAIL is critical alert)
+    - Bulk evidence export triggered (high risk event — requires alerting)
+
+  EXTRACTION EVENTS:
+    - Extraction job started (by whom, which case, which evidence item)
+    - Extraction job completed / failed
+    - Extraction plugin deployed (plugin name + version)
+    - Scaler action (pods scaled up/down)
+
+  SEARCH EVENTS:
+    - Search query submitted (user, query terms, case scope, result count)
+    Note: Search query logging is sensitive — query terms may contain personal
+    data. Confirm with legal/privacy team what query fields to log vs. redact.
+
+  ADMINISTRATIVE EVENTS:
+    - User account created / modified / disabled / deleted
+    - Role / permission change
+    - System configuration change (Helm values update, plugin update)
+    - Keycloak realm configuration change
+    - Backup initiated / completed / failed
+    - Audit log access (who viewed the audit log — meta-audit)
+
+
+================================================================================
+8. DATA RESIDENCY & COMPLIANCE CONSIDERATIONS
+================================================================================
+
+  CANADIAN LAW ENFORCEMENT / GOVERNMENT CONTEXT:
+  If this deployment is within a Canadian government or law enforcement
+  context, the following compliance frameworks are likely applicable:
+
+  +----------------------------------+----------------------------------------+
+  | Framework / Standard             | Audit Relevance                        |
+  +----------------------------------+----------------------------------------+
+  | Privacy Act (Canada)             | Access logs must be available to       |
+  |                                  | demonstrate who accessed personal data  |
+  |                                  | of individuals during investigations.   |
+  +----------------------------------+----------------------------------------+
+  | Treasury Board Directive on      | Mandatory logging of access to         |
+  | Security Management              | Protected B and above information.      |
+  +----------------------------------+----------------------------------------+
+  | RCMP / Police Services Act       | Chain of custody for evidence used in  |
+  |                                  | criminal prosecutions must be          |
+  |                                  | documented and defensible in court.    |
+  +----------------------------------+----------------------------------------+
+  | ISO 27001 / SOC 2 Type II        | Audit trail completeness, retention,   |
+  |                                  | and access controls are audited.       |
+  +----------------------------------+----------------------------------------+
+  | Canadian Criminal Code s. 491    | Physical and digital evidence must be  |
+  |                                  | properly documented to be admissible.  |
+  +----------------------------------+----------------------------------------+
+
+  DATA RESIDENCY:
+  All audit logs must remain within Canada (on-premises or Canadian cloud
+  region). If using cloud SIEM (e.g., Splunk Cloud, Microsoft Sentinel):
+    - Confirm data processing and storage in Canada (e.g., Azure Canada Central
+      / Canada East, or AWS ca-central-1)
+    - Confirm no log data is replicated to foreign jurisdictions
+  [PENDING — OI-1]: Confirm data residency requirements with Legal/Privacy team.
+
+  RETENTION PERIOD:
+  [PENDING — OI-2]: Confirm minimum audit log retention period with Legal.
+  Common starting points:
+    - Active investigation logs: retain indefinitely (or until case is closed
+      AND all appeals exhausted)
+    - General access logs: 7 years minimum (government records standard)
+    - Failed authentication logs: 1–3 years (shorter, less sensitive)
+
+
+================================================================================
+9. OPEN ITEMS (ACTION REQUIRED)
+================================================================================
+
+  [ ] OI-1: DATA RESIDENCY
+      Q: Must audit logs remain on Canadian soil (on-prem or Canadian cloud
+         region)? Any restrictions on cloud SIEM providers?
+      Owner: [Legal / Privacy Officer]
+
+  [ ] OI-2: AUDIT LOG RETENTION PERIOD
+      Q: What is the minimum legal retention period for audit logs? Distinguish
+         between investigation-specific logs and general platform access logs.
+      Owner: [Legal Team]
+
+  [ ] OI-3: SIEM PLATFORM SELECTION
+      Q: Is there an existing organizational SIEM platform Hansken should
+         integrate with (Splunk, Sentinel, Graylog, ELK)? Or is a new one
+         being deployed?
+      Owner: [IT Security Team]
+
+  [ ] OI-4: PHYSICAL CoC PROCESS
+      Q: Does the physical chain of custody process (from device seizure to
+         Hansken ingestion) already have a documented standard? If not, a
+         procedure must be drafted to complement the digital audit trail.
+      Owner: [Operations / Forensics Team]
+
+  [ ] OI-5: DEMS REQUIREMENT
+      Q: What is the volume of court submissions expected per year? This
+         determines whether investment in a DEMS platform is justified.
+      Owner: [Programme Manager / Legal]
+
+  [ ] OI-6: SEARCH QUERY LOGGING SCOPE
+      Q: Should search query terms be logged in the audit trail? This has
+         privacy implications (query terms may reveal investigative strategy
+         or contain PII). Confirm with Legal/Privacy before enabling.
+      Owner: [Legal / Privacy Officer]
+
+  [ ] OI-7: HASH ALGORITHM STANDARD
+      Q: Is there an organizational or regulatory standard for the hash
+         algorithm to use for evidence integrity verification?
+         (SHA-256 recommended; SHA-1 is no longer acceptable in most
+         forensic contexts; MD5 is deprecated for integrity use)
+      Owner: [Forensics Lead / Legal]
+
+
+================================================================================
+10. REFERENCES
+================================================================================
+  [1] Hansken Forensic Measures Documentation
+      https://learning.hansken.org/docs/ (Forensic Measures section)
+
+  [2] Hansken NFI — Evidence Integrity and Chain of Custody
+      https://hansken.nl
+
+  [3] Immudb — Open Source Immutable Database for Audit Logs
+      https://immudb.io/
+
+  [4] VIDIZMO Digital Evidence Management System
+      https://www.vidizmo.com/dems
+
+  [5] Axon Evidence Management
+      https://www.axon.com/products/axon-evidence
+
+  [6] AWS S3 Object Lock — WORM Storage
+      https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html
+
+  [7] MinIO Object Lock — Self-Hosted WORM
+      https://min.io/docs/minio/linux/administration/object-management/object-retention.html
+
+  [8] Velero (Kubernetes backup incl. audit state)
+      https://velero.io/docs/
+
+  [9] Existing Architecture Document (Internal)
+      hansken_data_flow_hierarchy.md — Hansken Data Flow & Architecture Hierarchy
+
+  [10] Task 1 — User Access Workflow (Internal)
+       task1_user_access_workflow.txt
+
+  [11] Task 3 — Environment Specification Sheet (Internal)
+       task3_environment_spec.txt
+
+
+================================================================================
+END OF DOCUMENT — TASK 4: AUDIT TRAIL & CHAIN OF CUSTODY
+================================================================================
